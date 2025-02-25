@@ -167,7 +167,7 @@ class Saver:
 
     @staticmethod
     def do_load(fname):
-        return torch.load(fname)
+        return torch.load(fname, weights_only=False)
 
     def load_last_checkpoint(self) -> Optional[any]:
         if not os.path.isdir(self.dir):
