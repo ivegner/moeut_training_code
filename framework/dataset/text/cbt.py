@@ -149,4 +149,4 @@ class ChildrenBooksTest:
         return res
 
     def start_test(self):
-        return ProbabilityCompareTest(self.names, n_ways=10)
+        return ProbabilityCompareTest(self.names, n_ways=10, normalize_by_length=False)
