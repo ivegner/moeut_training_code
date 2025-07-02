@@ -1,3 +1,4 @@
+import io
 from typing import List, Optional, Dict, Any
 import numpy as np
 
@@ -18,7 +19,6 @@ TYPE_MAP = {
 
 
 _DATA_URL = "https://huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/main/{split}/chunk{chunk}/example_{type}_{index}.jsonl.zst"
-
 
 class SlimPajama(ChunkedSentencepieceLMDataset):
     TOKENIZER_N_FILES = 200
@@ -63,3 +63,28 @@ class SlimPajama(ChunkedSentencepieceLMDataset):
             print("Map done.")
 
         super().__init__(unroll_len, n_extra, split, cache_dir, n_tokens, token_limit)
+
+zstd=None
+def read_lines_from_local_zst(fpath: str):
+    # from https://stackoverflow.com/questions/61067762/how-to-extract-zst-files-into-a-pandas-dataframe
+    global zstd
+    if zstd is None:
+        import zstandard as zstd
+
+    DCTX = zstd.ZstdDecompressor(max_window_size=2**31)
+    with (
+        zstd.open(fpath, mode='rb', dctx=DCTX) as zfh,
+        io.TextIOWrapper(zfh) as iofh
+    ):
+        for line in iofh:
+            yield line
+
+class SlimPajamaLocal(SlimPajama):
+    def __init__(self, local_dir, *args, **kwargs):
+        self.local_dir = local_dir
+        super().__init__(*args, **kwargs)
+
+    def zst_line_iterator(self, url: str):
+        fpath = url.replace("https://huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/main/", self.local_dir + "/")
+        for l in read_lines_from_local_zst(fpath):
+            yield self.parse_with_sep(l)
