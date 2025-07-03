@@ -14,7 +14,13 @@ import tasks
 
 torch.backends.cudnn.benchmark = True
 # torch.backends.cudnn.enabled = False
+import multiprocessing as mp
+import torch.multiprocessing as tmp
+import os
 
+# monkey patch multiprocessing to use the number of CPUs specified in the environment variable
+mp.cpu_count = lambda: int(os.environ.get("MOEUT_CPU_COUNT", os.cpu_count()))
+tmp.cpu_count = lambda: int(os.environ.get("MOEUT_CPU_COUNT", os.cpu_count()))
 
 
 def register_args(parser: framework.helpers.ArgumentParser):
