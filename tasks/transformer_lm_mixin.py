@@ -16,7 +16,6 @@ from layers.moe_layer import MoE
 from framework.interfaces import Result
 import os
 
-
 @args
 def a(parser: framework.helpers.ArgumentParser):
     parser.add_argument("-lm.trafo.context_blocks", default=1)
@@ -232,6 +231,13 @@ class TransformerLMMixin:
         else:
             layers = [mklayer() for _ in range(self.helper.args.transformer.encoder_n_layers)]
 
+        # if self.helper.args.rope.rotate_fraction == 0.0:
+        #     # make absolute position encoding layer
+        #     for layer in layers:
+        #         assert getattr(layer.self_attn, "pe") is None
+
+        #     layers.insert(0, AbsolutePositionEncodingLayer(max_length, d_embed))
+
         return layers
 
 
@@ -298,6 +304,7 @@ class TransformerLMMixin:
             norm_input=self.helper.args.lm.trafo.norm_input,
             cross_layer_state="actsut" in self.helper.args.transformer.variant,
             log_interval=self.helper.args.details_log_interval,
+            do_absolute_pos=(self.helper.args.rope.rotate_fraction == 0.0)
             )
 
         self.n_weights = sum(p.numel() for p in model.parameters())

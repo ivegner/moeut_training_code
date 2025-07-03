@@ -22,24 +22,63 @@ def unique_obejcts(l: List[Any]):
     return res
 
 
+class AbsolutePositionEncodingLayer(torch.nn.Module):
+    def __init__(self, max_length: int, d_embed: int):
+        super().__init__()
+        self.pe = torch.nn.Embedding(max_length, d_embed)
+        self.register_buffer("position_ids", torch.arange(max_length).expand((1, -1)))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.kaiming_normal_(self.pe.weight, mode="fan_in", nonlinearity="linear")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[1] > self.position_ids.shape[1]:
+            raise ValueError(
+                f"Input sequence length {x.shape[1]} exceeds maximum position encoding length {self.position_ids.shape[1]}."
+            )
+        position_ids = self.position_ids[:, : x.shape[1]]
+        p = self.pe(position_ids)
+        return x + p
+
+
 class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
-    def __init__(self, voc_size: int, embedding_size: Optional[int], state_size: int, dropout: float,
-                 layers: List[torch.nn.Module], n_prev_states: int,
-                 n_prev_states_test: Optional[int] = None,
-                 same_length_eval: bool = True, norm_before_output: bool = False,
-                 p_drop_layer: float = 0.0, use_last_state: bool = False, same_length: bool = False,
-                 norm_input: bool = False,
-                 cross_layer_state: bool = False,
-                 log_interval: Optional[int] = 100):
+    def __init__(
+        self,
+        voc_size: int,
+        embedding_size: Optional[int],
+        state_size: int,
+        dropout: float,
+        layers: List[torch.nn.Module],
+        n_prev_states: int,
+        n_prev_states_test: Optional[int] = None,
+        same_length_eval: bool = True,
+        norm_before_output: bool = False,
+        p_drop_layer: float = 0.0,
+        use_last_state: bool = False,
+        same_length: bool = False,
+        norm_input: bool = False,
+        cross_layer_state: bool = False,
+        log_interval: Optional[int] = 100,
+        do_absolute_pos: bool = False,
+    ):
 
         super().__init__()
 
         self.embedding = torch.nn.Embedding(voc_size, embedding_size or state_size)
+
         # with torch.no_grad():
         #     self.embedding.weight.uniform_(-0.1, 0.1)
 
         # torch.nn.init.xavier_uniform_(self.embedding.weight)
         torch.nn.init.kaiming_normal_(self.embedding.weight, mode="fan_in", nonlinearity="linear")
+        if do_absolute_pos:
+            print("Using absolute position encoding")
+            for layer in layers:
+                assert getattr(layer.self_attn, "pe") is None, "Cannot use absolute position encoding with layers that have relative position encoding"
+            pe = AbsolutePositionEncodingLayer(10000, embedding_size or state_size)
+            pe.reset_parameters()
+            self.embedding = torch.nn.Sequential(self.embedding, pe)
 
         self.shared_layers = all([la is layers[0] for la in layers])
 
@@ -64,7 +103,6 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
         self.cross_layer_state = cross_layer_state
         self.log_interval = log_interval
         self.reg_loss = 0
-
 
         out_proj_size = embedding_size or state_size
         self.output = torch.nn.Linear(out_proj_size, voc_size)
@@ -91,7 +129,9 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
 
         return net
 
-    def forward(self, x: torch.Tensor, target: Optional[torch.Tensor], state) -> Tuple[torch.Tensor, Any]:
+    def forward(
+        self, x: torch.Tensor, target: Optional[torch.Tensor], state
+    ) -> Tuple[torch.Tensor, Any]:
         causality_mask = generate_square_subsequent_mask(x.shape[0], x.device)
 
         net = self.dropout(self.embedding(x.T.long()))
@@ -107,10 +147,12 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
 
         same_length = self.same_length or ((not self.training) and self.same_length_eval)
         if same_length and state is not None:
-            causality_mask = [self.generate_history_mask(x.shape[0], x.device)] + \
-                             [torch.zeros_like(causality_mask)] * (len(state[0]) - 1) + [causality_mask]
+            causality_mask = (
+                [self.generate_history_mask(x.shape[0], x.device)]
+                + [torch.zeros_like(causality_mask)] * (len(state[0]) - 1)
+                + [causality_mask]
+            )
             causality_mask = torch.cat(causality_mask, -1)
-
 
         plot_cossim = self.log_interval and self.iter % self.log_interval == 0 and self.training
 
@@ -144,8 +186,9 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
             mask = AttentionMask(None, causality_mask)
 
             if self.cross_layer_state:
-                cross_layer_state, net_o = l(cross_layer_state, inp, mask=mask, attend_to=attend_to,
-                                             pos_offset=pos_offset)
+                cross_layer_state, net_o = l(
+                    cross_layer_state, inp, mask=mask, attend_to=attend_to, pos_offset=pos_offset
+                )
             else:
                 net_o = l(inp, mask=mask, attend_to=attend_to, pos_offset=pos_offset)
 
@@ -158,7 +201,10 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
                 cossim = framework.utils.cossim(net_o, net).abs().mean()
                 self.log(f"activation_norm/abs_update_layer_{li}", ndiff.mean())
                 self.log(f"activation_norm/in_layer_{li}", n_in.mean())
-                self.log(f"activation_norm/rel_update_layer_{li}", (ndiff/n_in.clamp(min=torch.finfo(n_in.dtype).eps)).mean())
+                self.log(
+                    f"activation_norm/rel_update_layer_{li}",
+                    (ndiff / n_in.clamp(min=torch.finfo(n_in.dtype).eps)).mean(),
+                )
                 self.log(f"activation_norm/io_cossim_{li}", cossim)
 
             if self.training and self.p_drop_layer > 0.0:
@@ -168,18 +214,26 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
 
         if self.use_last_state and n_prev_states > 0:
             # If we carry over the last state, save it here
-            new_state = [((state[0] if state is not None else []) + [net.detach()])[-n_prev_states:]]
+            new_state = [
+                ((state[0] if state is not None else []) + [net.detach()])[-n_prev_states:]
+            ]
 
         if plot_cossim:
             with torch.no_grad():
                 f_sample = [f.contiguous().view(-1, f.shape[-1])[:1024] for f in features]
                 f_sample_all = torch.stack(f_sample, -2)
                 scores = framework.utils.cossim(f_sample_all, f_sample_all).mean(0)
-                self.log("feature_cossim", framework.visualize.plot.Heatmap(scores, range=(0, 1), textval=False))
+                self.log(
+                    "feature_cossim",
+                    framework.visualize.plot.Heatmap(scores, range=(0, 1), textval=False),
+                )
 
                 outs = F.softmax(self.gen_output(f_sample_all, target).transpose(0, 1), -1)
                 scores = framework.utils.cossim(outs, outs).mean(0)
-                self.log("out_dist_cossim", framework.visualize.plot.Heatmap(scores, range=(0, 1), textval=False))
+                self.log(
+                    "out_dist_cossim",
+                    framework.visualize.plot.Heatmap(scores, range=(0, 1), textval=False),
+                )
 
                 real_out = outs[:, -1]
                 for i in range(outs.shape[-2] - 1):
@@ -187,11 +241,9 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
 
                 del outs
 
-
         del features
 
         net = self.gen_output(net, target)
         self.iter += 1
 
         return net, new_state
-
