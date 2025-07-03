@@ -57,8 +57,8 @@
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "env": {
-                "PATH:": "${workspaceFolder}/.pixi/envs/default/bin:${env:PATH}",
-                "MOEUT_CPU_COUNT": "6"
+                "PATH": "${workspaceFolder}/.pixi/envs/default/bin:${env:PATH}",
+                "CUDA_VISIBLE_DEVICES": "0,1"
             },
             "console": "integratedTerminal",
             "args": [
@@ -81,8 +81,10 @@
                 "-local_slimpajama_data", "/public/hf/datasets/cerebras/SlimPajama-627B/",
                 "-fs_cache_pattern", "None",
                 "-rope.rotate_fraction", "0", // Use 0 for abs positional encodings
-                "-log", "tb", "-reset", "1", "-lm.eval.enabled", "0", "-lm.unroll", "128",
-                "-batch_size", "8"
+                "-log", "tb", "-reset", "1", "-lm.eval.enabled", "0",
+                "-gpu", "0,1"
+                // "-lm.unroll", "128",
+                // "-batch_size", "8"
             ]
         },
 

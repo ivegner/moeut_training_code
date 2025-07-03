@@ -75,7 +75,7 @@ class TransformerLanguageModel(LoggingLayer, RegularizedLayer, torch.nn.Module):
         if do_absolute_pos:
             print("Using absolute position encoding")
             for layer in layers:
-                assert getattr(layer.self_attn, "pe") is None, "Cannot use absolute position encoding with layers that have relative position encoding"
+                assert getattr(layer.self_attn, "pe", None) is None, "Cannot use absolute position encoding with layers that have relative position encoding"
             pe = AbsolutePositionEncodingLayer(10000, embedding_size or state_size)
             pe.reset_parameters()
             self.embedding = torch.nn.Sequential(self.embedding, pe)
