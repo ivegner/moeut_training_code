@@ -389,9 +389,9 @@ class FullMoeRelativeAttentionCore(LayerWithVisualization, LoggingLayer, Regular
         if self.selection_dropout > 0 and self.training:
             t = F.dropout(t, self.selection_dropout)
 
-        sel = F.linear(t, w).float()
+        sel = F.linear(t, w).float() # [b, n, n_copies * n_experts]
 
-        sel = sel.view(*sel.shape[:-1], n_copies, -1)
+        sel = sel.view(*sel.shape[:-1], n_copies, -1) # [b, n, n_copies, n_experts]
         with torch.no_grad():
             if self.expert_dropout > 0 and self.training:
                 mask = torch.rand_like(sel) < self.expert_dropout
@@ -411,6 +411,10 @@ class FullMoeRelativeAttentionCore(LayerWithVisualization, LoggingLayer, Regular
         sel_index_shifted = (torch.arange(n_copies, device=sel_index.device, dtype=sel_index.dtype) * n_experts).unsqueeze(-1) + sel_index
         sel_index_pp = cvmm_prepare_sel2(sel_index_shifted.flatten(-2,-1), sel_val)
 
+        # sel: [b, n, n_copies, n_experts]
+        # sel_val: [b, n, n_copies, moe_k]
+        # sel_index: [b, n, n_copies, moe_k]
+        # sel_index_pp: ???
         return Selection(sel, sel_val, sel_index, sel_index_pp)
 
     def before_loss(self):
@@ -510,7 +514,7 @@ class FullMoeRelativeAttentionCore(LayerWithVisualization, LoggingLayer, Regular
             assert curr_state.shape[1] == attend_to.shape[1], "If attend_to has different shape than curr_state, pos_offset should be provided"
             pos_offset = 0
 
-        sel = self.compute_sel(curr_state, attend_to)
+        sel = self.compute_sel(curr_state, attend_to) # {name: Selection for all names that have experts}
 
         # scale q and k with sqrt(scale) before the attention. This should save memory, be faster, and
         # keep the range of k and v better. It should make attention NaNs better with float16.

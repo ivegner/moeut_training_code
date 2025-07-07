@@ -1,9 +1,11 @@
 import os
+
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 # os.environ['TORCH_LOGS'] = "+dynamo"
 # os.environ['TORCHDYNAMO_VERBOSE'] = "1"
 
+from pathlib import Path
 from typing import Dict, Optional
 
 import einops
@@ -19,7 +21,6 @@ torch.backends.cudnn.benchmark = True
 # torch.backends.cudnn.enabled = False
 
 
-
 def register_args(parser: framework.helpers.ArgumentParser):
     task_db.register_args(parser)
     parser.add_argument("-state_size", default=128)
@@ -33,23 +34,31 @@ def register_args(parser: framework.helpers.ArgumentParser):
     parser.add_argument("-transformer.attention_dropout", default=0.0)
     parser.add_argument("-load_pretrained_model", type=str)
     parser.add_argument("-test_pretrained", default=1)
-    parser.add_argument("-train_baseline", default=False, help="Train the model on easy task and test on hard,"
-                                                               "no masking")
+    parser.add_argument(
+        "-train_baseline",
+        default=False,
+        help="Train the model on easy task and test on hard," "no masking",
+    )
     parser.add_argument("-test_only", default=False)
     parser.add_argument("-nan_detect", default=False)
     parser.add_argument("-fs_cache_pattern", default="*", parser=parser.str_or_none_parser)
 
 
 def initialize(restore: Optional[str] = None):
-    helper = framework.helpers.TrainingHelper(wandb_project_name="lm",
-                                              register_args=register_args, extra_dirs=["export", "model_weights", "tmp"],
-                                              log_async=True, restore=restore)
+    helper = framework.helpers.TrainingHelper(
+        wandb_project_name="lm",
+        register_args=register_args,
+        extra_dirs=["export", "model_weights", "tmp"],
+        log_async=True,
+        restore=restore,
+    )
 
     dataset.init_fs_cache(helper.args.fs_cache_pattern)
     task = task_db.get_task(helper.args.task)
 
     task = task(helper)
     return helper, task
+
 
 def main():
     helper, task = initialize()
@@ -63,9 +72,13 @@ def main():
 
         pretrained = os.path.expanduser(helper.args.load_pretrained_model)
         if not helper.args.load_pretrained_model.endswith(".pth"):
-            pretrained = os.path.join(pretrained, str(helper.args.sweep_id_for_grid_search), "model.pth")
+            pretrained = os.path.join(
+                pretrained, str(helper.args.sweep_id_for_grid_search), "model.pth"
+            )
 
-        assert os.path.isfile(pretrained), f"Failed to load pretrained weights. File {pretrained} not found."
+        assert os.path.isfile(
+            pretrained
+        ), f"Failed to load pretrained weights. File {pretrained} not found."
 
         if helper.dist_env.is_master():
             task.load_weights(pretrained)
@@ -76,31 +89,59 @@ def main():
     # model lives on task.model
     print(task.model)
 
-    state_dict = {
-    }
+    layer_weights = []
+
     for i, block in enumerate(task.model.unique_layers):
-        # W_QK = W_Q @ W_K.T
         proj = block.self_attn.projections
-        state_dict[f"blocks.{i}.attn.W_Q"] = proj.q # 384x768
-        state_dict[f"blocks.{i}.attn.b_Q"] = proj.b_Q
-        state_dict[f"blocks.{i}.attn.W_K"] = proj.k # 384x768
-        state_dict[f"blocks.{i}.attn.b_K"] = proj.b_K
+        d_head = helper.args.transformer.head_projection_size
+        d_embed = helper.args.state_size
+        n_heads = block.self_attn.get_n_copies("k")
+        assert (
+            n_heads
+            == block.self_attn.get_n_copies("q")
+            == block.self_attn.get_n_copies("v")
+            == block.self_attn.get_n_copies("o")
+        ), f"Expected n_heads to be the same for all projections, got {n_heads}, {block.self_attn.get_n_copies('q')}, {block.self_attn.get_n_copies('v')}, {block.self_attn.get_n_copies('o')}"
 
-        # W_OV = W_V @ W_O
-        state_dict[f"blocks.{i}.attn.W_V"] = proj.v # 40*768*96
-        state_dict[f"blocks.{i}.attn.b_V"] = proj.b_V
-        state_dict[f"blocks.{i}.attn.W_O"] = proj.o # 40*96*768
-        state_dict[f"blocks.{i}.attn.b_O"] = proj.b_O
+        # k and q don't have experts
+        k = proj.k.view(n_heads, d_head, d_embed)
+        q = proj.q.view(n_heads, d_head, d_embed)
 
-    # there's also .pkm, which has the FFN experts?
+        # v and o have experts
+        v = proj.v.view(n_heads, block.self_attn.n_experts["v"], d_embed, d_head)
+        o = proj.o.view(n_heads, block.self_attn.n_experts["o"], d_head, d_embed)
+        # ...but I don't think that's actually important for TalkingHeads? TODO
+        v = v.reshape(-1, d_embed, d_head)
+        o = o.reshape(-1, d_head, d_embed)
 
-    # make QK and OV for both layers in task.model.unique_layers[i].self_attn
+        l = {}
+        # none of the self attn blocks have biases, so we don't need refactor_...
+        l["qk"] = [QK(q[h], k[h]) for h in range(n_heads)]
+        l["ov"] = [OV(_o, _v) for _o, _v in zip(o, v)]
+
+        l["n_heads"] = n_heads
+        l["d_head"] = d_head
+        l["d_embed"] = d_embed
+        l["n_experts"] = {"v": block.self_attn.n_experts["v"], "o": block.self_attn.n_experts["o"]}
+
+        layer_weights.append(l)
+
+        # there's also .pkm, which has the FFN experts?
+
+    # Save the layer weights to a torch dump
+    layer_weights_path = Path("analysis_out", helper.args.name, "layer_weights.pth")
+    os.makedirs(os.path.dirname(layer_weights_path), exist_ok=True)
+    torch.save(layer_weights, layer_weights_path)
+    print(f"Layer weights saved to {layer_weights_path}")
+
 
 def QK(W_Q, W_K):
     return FactoredMatrix(W_Q, W_K.transpose(-2, -1))
 
+
 def OV(W_O, W_V):
     return FactoredMatrix(W_V, W_O)
+
 
 def refactor_factored_attn_matrices(state_dict: Dict[str, torch.Tensor], n_layers: int):
     """Experimental method for managing queries, keys and values.
@@ -139,7 +180,7 @@ def refactor_factored_attn_matrices(state_dict: Dict[str, torch.Tensor], n_layer
         b_K), which is fairly messy. To deal with the biases, we concatenate them to W_Q and W_K to
         simulate a d_model+1 dimensional input (whose final coordinate is always 1), do the SVD
         factorization on this effective matrix, then separate out into final weights and biases.
-        """
+    """
 
     # assert (
     #     self.cfg.positional_embedding_type != "rotary"

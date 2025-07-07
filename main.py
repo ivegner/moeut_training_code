@@ -22,7 +22,6 @@ import os
 mp.cpu_count = lambda: int(os.environ.get("MOEUT_CPU_COUNT", os.cpu_count()))
 tmp.cpu_count = lambda: int(os.environ.get("MOEUT_CPU_COUNT", os.cpu_count()))
 
-
 def register_args(parser: framework.helpers.ArgumentParser):
     task_db.register_args(parser)
     parser.add_argument("-state_size", default=128)

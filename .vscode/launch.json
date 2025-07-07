@@ -58,7 +58,7 @@
             "program": "${workspaceFolder}/main.py",
             "env": {
                 "PATH": "${workspaceFolder}/.pixi/envs/default/bin:${env:PATH}",
-                "CUDA_VISIBLE_DEVICES": "0,1"
+                // "CUDA_VISIBLE_DEVICES": "0,1"
             },
             "console": "integratedTerminal",
             "args": [
@@ -77,17 +77,68 @@
                 "-moe.att.q_expert", "0", "-moe.att.k_expert", "0", "-moe.att.v_expert", "1",
                 "-moe.att.o_expert", "1", "-lm.trafo.context_blocks", "0", "-min_lr_multiplier", "0.1",
                 "-details_log_interval", "500", "-lm.eval.enabled", "0", "-moe.nonorm", "1",
-                "-name", "slimpajama_moeut_small_matched_rope_noln_long",
+                "-name", "debug_moeut_small",
                 "-local_slimpajama_data", "/public/hf/datasets/cerebras/SlimPajama-627B/",
                 "-fs_cache_pattern", "None",
                 "-rope.rotate_fraction", "0", // Use 0 for abs positional encodings
                 "-log", "tb", "-reset", "1", "-lm.eval.enabled", "0",
-                "-gpu", "0,1"
-                // "-lm.unroll", "128",
-                // "-batch_size", "8"
+            ]
+            // "-gpu", "0,1"
+            // "-lm.unroll", "128",
+            // "-batch_size", "8"
+        },
+        {
+            "name": "ivan_main MOEUT",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ivan_main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-restore", "save/slimpajama_moeut_small_matched_rope_noln_long/checkpoint/model-100000.pth",
+                "-test_only", "1", "-log", "tb", "-name", "dump_slimpajama_moeut_small_matched_rope_noln_long", "-reset", "1",
+                "-lm.eval.enabled", "0", "-stop_after", "0"
             ]
         },
-
+        {
+            "name": "ivan_main Baseline",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ivan_main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-restore", "save/slimpajama_baseline_small_rope_long_nodrop/checkpoint/model-100000.pth",
+                "-test_only", "1", "-log", "tb", "-name", "dump_slimpajama_baseline_small_rope_long_nodrop", "-reset", "1",
+                "-lm.eval.enabled", "0", "-stop_after", "0"
+            ]
+        },
+        {
+            "name": "SlimPajamaLocal Baseline small",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "env": {
+                "PATH": "${workspaceFolder}/.pixi/envs/default/bin:${env:PATH}",
+                // "CUDA_VISIBLE_DEVICES": "0,1"
+            },
+            "console": "integratedTerminal",
+            "args": [
+                "-task", "slimpajama_transformer", "-test_interval", "2000", "-state_size", "412",
+                "-transformer.ff_multiplier", "4.985", "-transformer.encoder_n_layers", "16",
+                "-transformer.n_heads", "10", "-dropout", "0.0", "-lr", "0.00025", "-optimizer", "adamw",
+                "-lm.unroll", "1024", "-batch_size", "64", "-grad_clip", "0.1", "-amp", "1",
+                "-save_interval", "10000", "-transformer.variant", "preln_rope", "-stop_after", "100000",
+                "-lr_sched.type", "cos", "-transformer.head_projection_size", "41", "-lmds.valid_ratio", "0.005",
+                "-wd", "0.01", "-lm.trafo.context_blocks", "0", "-min_lr_multiplier", "0.1",
+                "-details_log_interval", "500", "-name", "slimpajama_baseline_small_rope_long_nodrop",
+                "-local_slimpajama_data", "/public/hf/datasets/cerebras/SlimPajama-627B/",
+                "-fs_cache_pattern", "None",
+                "-rope.rotate_fraction", "0", // Use 0 for abs positional encodings
+                "-log", "tb", "-reset", "1", "-lm.eval.enabled", "0",
+            ]
+            // "-gpu", "0,1"
+            // "-lm.unroll", "128",
+            // "-batch_size", "8"
+        },
         {
             "name": "C4 SUT small",
             "type": "debugpy",
