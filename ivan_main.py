@@ -102,7 +102,7 @@ def QK(W_Q, W_K):
 def OV(W_O, W_V):
     return FactoredMatrix(W_V, W_O)
 
-def refactor_factored_attn_matrices(self, state_dict: Dict[str, torch.Tensor], n_layers: int):
+def refactor_factored_attn_matrices(state_dict: Dict[str, torch.Tensor], n_layers: int):
     """Experimental method for managing queries, keys and values.
     Stolen from HookedTransformer
 
