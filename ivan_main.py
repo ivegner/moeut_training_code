@@ -88,10 +88,29 @@ def main():
 
     # model lives on task.model
     print(task.model)
+    if helper.args.transformer.variant == "preln_rope":
+        layer_weights = get_baseline_layer_weights(task.model, helper)
+    else:
+        layer_weights = get_moeut_layer_weights(task.model, helper)
 
+    # Save the layer weights to a torch dump
+    layer_weights_path = Path("analysis_out", helper.args.name, "layer_weights.pth")
+    os.makedirs(os.path.dirname(layer_weights_path), exist_ok=True)
+    torch.save(layer_weights, layer_weights_path)
+    print(f"Layer weights saved to {layer_weights_path}")
+
+
+def QK(W_Q, W_K):
+    return FactoredMatrix(W_Q, W_K.transpose(-2, -1))
+
+
+def OV(W_O, W_V):
+    return FactoredMatrix(W_V, W_O)
+
+def get_moeut_layer_weights(model, helper):
     layer_weights = []
 
-    for i, block in enumerate(task.model.unique_layers):
+    for i, block in enumerate(model.unique_layers):
         proj = block.self_attn.projections
         d_head = helper.args.transformer.head_projection_size
         d_embed = helper.args.state_size
@@ -104,8 +123,8 @@ def main():
         ), f"Expected n_heads to be the same for all projections, got {n_heads}, {block.self_attn.get_n_copies('q')}, {block.self_attn.get_n_copies('v')}, {block.self_attn.get_n_copies('o')}"
 
         # k and q don't have experts
-        k = proj.k.view(n_heads, d_head, d_embed)
-        q = proj.q.view(n_heads, d_head, d_embed)
+        k = proj.k.view(n_heads, d_head, d_embed).permute(0, 2, 1) # not sure why moeut uses this arrangement of axes
+        q = proj.q.view(n_heads, d_head, d_embed).permute(0, 2, 1)
 
         # v and o have experts
         v = proj.v.view(n_heads, block.self_attn.n_experts["v"], d_embed, d_head)
@@ -127,20 +146,42 @@ def main():
         layer_weights.append(l)
 
         # there's also .pkm, which has the FFN experts?
+    return layer_weights
 
-    # Save the layer weights to a torch dump
-    layer_weights_path = Path("analysis_out", helper.args.name, "layer_weights.pth")
-    os.makedirs(os.path.dirname(layer_weights_path), exist_ok=True)
-    torch.save(layer_weights, layer_weights_path)
-    print(f"Layer weights saved to {layer_weights_path}")
+def get_baseline_layer_weights(model, helper):
+    layer_weights = []
 
+    for i, block in enumerate(model.unique_layers):
+        proj = block.self_attn
+        d_head = helper.args.transformer.head_projection_size
+        d_embed = helper.args.state_size
+        n_heads = block.self_attn.n_heads
 
-def QK(W_Q, W_K):
-    return FactoredMatrix(W_Q, W_K.transpose(-2, -1))
+        # proj.data_to_kv.weight: [2 * d_head * n_heads, d_embed]
+        # proj.data_to_q.weight: [d_head * n_heads, d_embed]
+        # proj.out_proj.weight: [d_embed, d_head * n_heads]
+        k, v = proj.data_to_kv.weight.split(n_heads * d_head, dim=0) # [d_head * n_heads, d_embed] each
+        q = proj.data_to_q.weight
+        o = proj.out_proj.weight
 
+        k = k.view(n_heads, d_head, d_embed).permute(0, 2, 1) # not sure why moeut uses this arrangement of axes
+        q = q.view(n_heads, d_head, d_embed).permute(0, 2, 1)
+        v = v.view(n_heads, d_head, d_embed).permute(0, 2, 1)
+        o = o.view(d_embed, n_heads, d_head).permute(1, 0, 2) # [n_heads, d_embed, d_head]
 
-def OV(W_O, W_V):
-    return FactoredMatrix(W_V, W_O)
+        l = {}
+        # none of the self attn blocks have biases, so we don't need refactor_...
+        l["qk"] = [QK(q[h], k[h]) for h in range(n_heads)]
+        l["ov"] = [OV(_o, _v) for _o, _v in zip(o, v)]
+
+        l["n_heads"] = n_heads
+        l["d_head"] = d_head
+        l["d_embed"] = d_embed
+        # l["n_experts"] = {"v": block.self_attn.n_experts["v"], "o": block.self_attn.n_experts["o"]}
+
+        layer_weights.append(l)
+
+    return layer_weights
 
 
 def refactor_factored_attn_matrices(state_dict: Dict[str, torch.Tensor], n_layers: int):

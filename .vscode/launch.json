@@ -129,7 +129,7 @@
                 "-save_interval", "10000", "-transformer.variant", "preln_rope", "-stop_after", "100000",
                 "-lr_sched.type", "cos", "-transformer.head_projection_size", "41", "-lmds.valid_ratio", "0.005",
                 "-wd", "0.01", "-lm.trafo.context_blocks", "0", "-min_lr_multiplier", "0.1",
-                "-details_log_interval", "500", "-name", "slimpajama_baseline_small_rope_long_nodrop",
+                "-details_log_interval", "500", "-name", "debug_baseline_small",
                 "-local_slimpajama_data", "/public/hf/datasets/cerebras/SlimPajama-627B/",
                 "-fs_cache_pattern", "None",
                 "-rope.rotate_fraction", "0", // Use 0 for abs positional encodings

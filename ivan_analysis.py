@@ -1,6 +1,7 @@
 # %%
 import os
 
+from plotly.subplots import make_subplots
 import torch
 import transformer_lens
 from transformer_lens.utils import composition_scores
@@ -73,6 +74,19 @@ def re_get_single_component(u, s, v, i):
 #     return model.blocks[l].attn.QK[h]
 
 
+def simple_heatmap(dest_layer, right):
+    # only look at the layers and heads, not all components
+    heatmap = np.zeros((dest_layer, n_heads))
+    for layer in range(dest_layer):
+        print(layer)
+        for head in range(n_heads):
+            src = model.blocks[layer].attn.OV[head]
+            scores = []
+            # src = re_get_single_component(*src_usv, comp_idx)
+            scores.append(composition_scores(src, right).item())
+            heatmap[layer, head] = max(scores)
+    return heatmap
+
 # create a heatmap of all heads in all layers for a given destination layer and matrix
 def exhaustive_heatmap(dest_layer, right):
     heatmap = np.zeros((dest_layer, n_heads))
@@ -100,6 +114,7 @@ def very_exhaustive_heatmap(layer_weights):
             # compute composition scores from ov in layer i to qk in layer j
             for ov_idx, ov in enumerate(layer_from["ov"]):
                 for qk_idx, qk in enumerate(layer_to["qk"]):
+                    print(f"Computing heatmap for {i}.{ov_idx} -> {j}.{qk_idx}")
                     src = ov.svd()
                     # right = qk.svd()
                     for k in range(layer_from["d_head"]):
@@ -110,22 +125,63 @@ def very_exhaustive_heatmap(layer_weights):
     return heatmap
 
 
-def simple_heatmap(dest_layer, right):
-    # only look at the layers and heads, not all components
-    heatmap = np.zeros((dest_layer, n_heads))
-    for layer in range(dest_layer):
-        print(layer)
-        for head in range(n_heads):
-            src = model.blocks[layer].attn.OV[head]
-            scores = []
-            # src = re_get_single_component(*src_usv, comp_idx)
-            scores.append(composition_scores(src, right).item())
-            heatmap[layer, head] = max(scores)
-    return heatmap
-
 # %%
 heatmap = very_exhaustive_heatmap(layer_weights)
 
+# %%
+heatmap.shape # (n_layers, n_layers, n_heads*n_experts, n_heads, d_head)
+
+imshow(heatmap.max(axis=-1)[0, 1], return_fig=True, xaxis="OV Head", yaxis="QK Head", title="Composition Scores from 0.OV to 1.QK (max over components)")
+
+# %%
+# plot on a 2d grid of heatmaps, x=layer from, y=layer to
+def plot_heatmap_grid(heatmap):
+    n_layers = heatmap.shape[0]
+    fig = make_subplots(
+        rows=n_layers, cols=n_layers,
+        subplot_titles=[f"{i}.OV -> {j}.QK" for i in range(n_layers) for j in range(n_layers)],
+    )
+
+    h = heatmap.max(axis=-1)
+    cmin = h.min()
+    cmax = h.max()
+
+    for i in range(n_layers):
+        for j in range(n_layers):
+            fig.add_trace(
+                go.Heatmap(
+                    z=h[i,j],
+                    x=np.arange(heatmap.shape[2]),
+                    y=np.arange(heatmap.shape[3]),
+                    colorscale="Viridis",
+                    showscale=False,
+                    name=f"{i}.OV -> {j}.QK",
+                    zmin=cmin,
+                    zmax=cmax,
+                    # colorbar=dict(
+                    #     title="Composition Score",
+                    #     # titleside="right",
+                    #     len=0.5,
+                    #     thickness=10,
+                    #     x=1.05,
+                    #     y=0.5,
+                    # ),
+                    # labels={
+                    #     "x": "OV Head",
+                    #     "y": "QK Head",
+                    # },
+                ),
+                row=i + 1,
+                col=j + 1,
+            )
+    fig.update_layout(title="Composition Scores Heatmap Grid (max over components)")
+                      #, xaxis_title="OV Head", yaxis_title="QK Head")
+
+    fig.data[-1].update(colorbar = dict(x=1.05, y=0.5, thickness=20), showscale=True)
+    return fig
+
+heatmap_grid_fig = plot_heatmap_grid(heatmap)
+heatmap_grid_fig.show()
 
 # # %%
 # src_layer, src_head = 8, 6  # gpt 2 small
@@ -156,3 +212,5 @@ heatmap = very_exhaustive_heatmap(layer_weights)
 
 # heatmap.show()
 # pio.write_image(heatmap, f"out", format="jpg")
+
+# %%

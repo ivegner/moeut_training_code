@@ -82,7 +82,7 @@ class FastRopeAttention(torch.nn.Module):
         q = self.data_to_q(curr_state)
         q = self.dropout(q)
 
-        k = self.project_to_torch_order(k)
+        k = self.project_to_torch_order(k) # [b, l, n_heads*d_head] -> [b, n_heads, l, d_head]
         q = self.project_to_torch_order(q)
         v = self.project_to_torch_order(v)
 
