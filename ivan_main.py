@@ -167,7 +167,7 @@ def get_baseline_layer_weights(model, helper):
         k = k.view(n_heads, d_head, d_embed).permute(0, 2, 1) # not sure why moeut uses this arrangement of axes
         q = q.view(n_heads, d_head, d_embed).permute(0, 2, 1)
         v = v.view(n_heads, d_head, d_embed).permute(0, 2, 1)
-        o = o.view(d_embed, n_heads, d_head).permute(1, 0, 2) # [n_heads, d_embed, d_head]
+        o = o.view(d_embed, n_heads, d_head).permute(1, 2, 0) # [n_heads, d_head, d_embed]
 
         l = {}
         # none of the self attn blocks have biases, so we don't need refactor_...

@@ -106,8 +106,8 @@
             "program": "${workspaceFolder}/ivan_main.py",
             "console": "integratedTerminal",
             "args": [
-                "-restore", "save/slimpajama_baseline_small_rope_long_nodrop/checkpoint/model-100000.pth",
-                "-test_only", "1", "-log", "tb", "-name", "dump_slimpajama_baseline_small_rope_long_nodrop", "-reset", "1",
+                "-restore", "save/slimpajama_baseline_small_rope_long_nodrop_3/checkpoint/model-100000.pth",
+                "-test_only", "1", "-log", "tb", "-name", "dump_slimpajama_baseline_small_rope_long_nodrop_3", "-reset", "1",
                 "-lm.eval.enabled", "0", "-stop_after", "0"
             ]
         },
