@@ -53,6 +53,49 @@ The code makes use of Weights and Biases for experiment tracking. In the "sweeps
 
 To reproduce our results, start a sweep for each of the YAML files in the "sweeps" directory. Run wandb agent for each of them in the main directory. This will run all the experiments, and they will be displayed on the W&B dashboard.
 
+## Multi-GPU Training
+
+This framework supports distributed training across multiple GPUs on a single machine or across multiple nodes using a custom distributed training approach.
+
+### Single Machine Multi-GPU Setup
+
+For training on multiple GPUs on a single machine, use PyTorch's `torchrun`:
+
+```bash
+torchrun --nproc_per_node=<num_gpus> main.py <your_arguments>
+```
+
+### Distributed Training Implementation
+
+The framework uses a **custom distributed training approach** rather than PyTorch's standard `DistributedDataParallel` (DDP):
+
+#### Key Features:
+- **Manual gradient reduction**: Instead of using DDP's automatic gradient synchronization, gradients are manually reduced using `torch.distributed.all_reduce()` operations
+- **Custom data splitting**: Each GPU process receives a different slice of the batch using `get_work_slice()`
+- **Broadcast-based weight synchronization**: Model weights are synchronized across processes via `torch.distributed.broadcast_object_list()`
+- **Environment auto-detection**: Automatically detects distributed environments (local multi-GPU via torchrun, or SLURM clusters)
+
+#### How It Works:
+1. **Environment Setup**: The framework detects distributed environments through environment variables (`WORLD_SIZE`, `RANK`, `LOCAL_RANK`, etc.)
+2. **Process Group Initialization**: Initializes PyTorch distributed process group with NCCL backend
+3. **Model Distribution**: Creates identical models on each GPU and synchronizes weights from master to all workers
+4. **Data Parallelism**: Each process gets a portion of the batch, processes it independently
+5. **Gradient Synchronization**: After backward pass, gradients are manually reduced across all processes using asynchronous all-reduce operations
+
+### Batch Size Considerations
+
+When using multi-GPU training, specify the total batch size you want, and the framework will automatically split it across GPUs:
+
+```bash
+# This will use batch_size=8 per GPU on 4 GPUs (total effective batch size = 32)
+torchrun --nproc_per_node=4 main.py -batch_size 32 -task c4_transformer
+```
+
+Alternatively, use `-per_device_batch_size` to specify per-GPU batch size:
+```bash
+torchrun --nproc_per_node=4 main.py -per_device_batch_size 8 -task c4_transformer
+```
+
 ## ClusterTool
 
 The code is designed to work with [ClusterTool](https://github.com/RobertCsordas/cluster_tool).
