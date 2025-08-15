@@ -1,5 +1,6 @@
 # %%
 import os
+from pathlib import Path
 
 from plotly.subplots import make_subplots
 import torch
@@ -19,16 +20,7 @@ import pandas as pd
 #     "gpt2-small", fold_value_biases=True, refactor_factored_attn_matrices=True
 # )
 
-layer_weights_path_moeut = "analysis_out/dump_slimpajama_moeut_small_matched_rope_noln_long/layer_weights.pth"
-layer_weights_path_baseline = (
-    "analysis_out/dump_slimpajama_baseline_small_rope_long_nodrop_3/layer_weights.pth"
-)
-
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_built() else "cpu"
-
-layer_weights_moeut = torch.load(layer_weights_path_moeut, weights_only=False, map_location=device)
-layer_weights_baseline = torch.load(layer_weights_path_baseline, weights_only=False, map_location=device)
-
 
 # %%
 
@@ -155,24 +147,23 @@ def very_exhaustive_heatmap(layer_weights, ut=True):
 
     return heatmap
 
+def get_weights_and_heatmap_from_path(layer_weights_path):
+    weights = torch.load(layer_weights_path, weights_only=False, map_location=device)
+    p = Path(layer_weights_path)
+    # heatmap is saved next to the layer_weights
+    heatmap_path = p.with_name("heatmap.pkl")
+    if not heatmap_path.exists():
+        heatmap = very_exhaustive_heatmap(weights, ut="moeut" in layer_weights_path)
+        with open(heatmap_path, "wb") as f:
+            torch.save(heatmap, f)
+    else:
+        heatmap = torch.load(heatmap_path, weights_only=False)
 
-# %%
-if not os.path.exists("heatmap_moeut.pkl"):
-    heatmap_moeut = very_exhaustive_heatmap(layer_weights_moeut, ut=True)
-    with open("heatmap_moeut.pkl", "wb") as f:
-        torch.save(heatmap_moeut, f)
-else:
-    heatmap_moeut = torch.load("heatmap_moeut.pkl", weights_only=False)
+    return weights, heatmap
 
-# %%
-if not os.path.exists("heatmap_baseline.pkl"):
-    heatmap_baseline = very_exhaustive_heatmap(layer_weights_baseline, ut=False)
-    with open("heatmap_baseline.pkl", "wb") as f:
-        torch.save(heatmap_baseline, f)
-else:
-    heatmap_baseline = torch.load("heatmap_baseline.pkl", weights_only=False)
 
 # # %%
+
 # heatmap.shape  # (n_layers, n_layers, n_heads*n_experts, n_heads, d_head)
 
 # imshow(
@@ -211,27 +202,6 @@ def random_composition_scores(d_embed, d_head, n_runs=10):
         maxes.append(_max)
         means.append(_mean)
     return maxes, means
-
-# %%
-# randoms for moeut
-d_embed = layer_weights_moeut[0]["d_embed"]
-d_head = layer_weights_moeut[0]["d_head"]
-maxes_moeut, means_moeut = random_composition_scores(d_embed, d_head, n_runs=10)
-mean_max_moeut = np.mean(maxes_moeut)
-mean_mean_moeut = np.mean(means_moeut)
-print(f"Mean of max composition score for random MoeUT: {mean_max_moeut} ± {np.std(maxes_moeut)}")
-print(f"Mean of mean composition score for random MoeUT: {mean_mean_moeut} ± {np.std(means_moeut)}")
-
-# %%
-# randoms for baseline
-d_embed = layer_weights_baseline[0]["d_embed"]
-d_head = layer_weights_baseline[0]["d_head"]
-maxes_baseline, means_baseline = random_composition_scores(d_embed, d_head, n_runs=10)
-mean_max_baseline = np.mean(maxes_baseline)
-mean_mean_baseline = np.mean(means_baseline)
-print(f"Mean of max composition score for random Baseline: {mean_max_baseline} ± {np.std(maxes_baseline)}")
-print(f"Mean of mean composition score for random Baseline: {mean_mean_baseline} ± {np.std(means_baseline)}")
-
 
 # %%
 # plot on a 2d grid of heatmaps, x=layer from, y=layer to
@@ -291,15 +261,6 @@ def plot_heatmap_grid(heatmap, ut=True, subtract=None, log_scale=False):
     fig.data[-1].update(colorbar=dict(x=1.05, y=0.5, thickness=20), showscale=True)
     return fig
 
-# %%
-heatmap_grid_fig = plot_heatmap_grid(heatmap_moeut, ut=True, subtract=mean_max_moeut, log_scale=False)
-# heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500)
-heatmap_grid_fig.show()
-
-# %%
-heatmap_grid_fig = plot_heatmap_grid(heatmap_baseline, ut=False, subtract=mean_max_baseline, log_scale=False)
-heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500)
-heatmap_grid_fig.show()
 
 # %%
 # for a single layer, plot comp scores for all components by head
@@ -346,21 +307,6 @@ def plot_composition_scores_by_component(heatmap, layer_from, layer_to, hline: f
     # fig.update_yaxes(range=[0, 1], dtick=0.1)
     return fig
 
-# # %%
-# # plot for a single layer, e.g. 0.OV to 1.QK
-# layer_from = 0
-# layer_to = 1
-# comp_scores_fig = plot_composition_scores_by_component(heatmap_moeut, layer_from, layer_to, hline=mean_max_moeut)
-# comp_scores_fig.update_layout(autosize=False, width=1200, height=800)
-# comp_scores_fig.show()
-
-# # %%
-# # plot for baseline: 4.OV to 5.QK
-# layer_from = 4
-# layer_to = 5
-# comp_scores_fig = plot_composition_scores_by_component(heatmap_baseline, layer_from, layer_to, hline=mean_max_baseline)
-# comp_scores_fig.update_layout(autosize=False, width=1200, height=800)
-# comp_scores_fig.show()
 
 # %%
 # For each OV-QK pair, plot percentage of components that have a composition score above threshold
@@ -388,40 +334,6 @@ def plot_percentage_above_threshold(heatmap, layer_from, layer_to, threshold=0):
     )
     print(f"Mean percentage of components above threshold {threshold}: {df['Percentage'].mean():.2f}%")
     return fig
-
-# # %%
-# layer_from = 0
-# layer_to = 1
-# threshold = mean_max_moeut
-# percentage_fig_moeut = plot_percentage_above_threshold(heatmap_moeut, layer_from, layer_to, threshold)
-# percentage_fig_moeut.update_layout(autosize=False, width=1200, height=800)
-# percentage_fig_moeut.show()
-
-# %%
-# percentage of components above threshold for moeut
-for i in range(heatmap_moeut.shape[0]):
-    for j in range(heatmap_moeut.shape[1]):
-        print(f"Layer {i} to {j}: {heatmap_moeut[i, j].shape}")
-        print(f"Mean composition score: {heatmap_moeut[i, j].mean().item()}")
-        print(f"Max composition score: {heatmap_moeut[i, j].max().item()}")
-        num_above = (heatmap_moeut[i, j] > mean_mean_moeut).sum()
-        num_total = heatmap_moeut[i, j].size
-        # percentage of components above threshold
-        percentage = num_above / num_total * 100
-        print(f"Components above mean-mean random threshold {mean_mean_moeut}: {num_above}/{num_total} ({percentage:.2f}%)")
-
-# %%
-# percentage of components above threshold for baseline
-for i in range(heatmap_baseline.shape[0]):
-    for j in range(i+1, heatmap_baseline.shape[1]):
-        print(f"Layer {i} to {j}: {heatmap_baseline[i, j].shape}")
-        print(f"Mean composition score: {heatmap_baseline[i, j].mean().item()}")
-        print(f"Max composition score: {heatmap_baseline[i, j].max().item()}")
-        num_above = (heatmap_baseline[i, j] > mean_mean_baseline).sum()
-        num_total = heatmap_baseline[i, j].size
-        # percentage of components above threshold
-        percentage = num_above / num_total * 100
-        print(f"Components above mean-mean random threshold {mean_mean_baseline}: {num_above}/{num_total} ({percentage:.2f}%)")
 
 
 # %%
@@ -475,16 +387,6 @@ def plot_top_components(heatmap, top_n=3, ut=True):
     )
     return fig
 
-# # %%
-# top_components_fig_moeut = plot_top_components(heatmap_moeut, top_n=3, ut=True)
-# top_components_fig_moeut.update_layout(autosize=False, width=1200, height=800)
-# top_components_fig_moeut.show()
-
-# # %%
-# top_components_fig_baseline = plot_top_components(heatmap_baseline, top_n=3, ut=True)
-# top_components_fig_baseline.update_layout(autosize=False, width=1800, height=1500)
-# top_components_fig_baseline.show()
-
 # %%
 # Plot percentage of components that have a composition score above threshold for each OV-QK pair
 def plot_percentage_above_threshold(heatmap, threshold=0, ut=True):
@@ -529,17 +431,6 @@ def plot_percentage_above_threshold(heatmap, threshold=0, ut=True):
         yaxis_title="OV Head",
     )
     return fig
-
-# %%
-percentage_above_threshold_fig_moeut = plot_percentage_above_threshold(heatmap_moeut, threshold=mean_max_moeut, ut=True)
-percentage_above_threshold_fig_moeut.update_layout(autosize=False, width=1200, height=800)
-percentage_above_threshold_fig_moeut.show()
-
-# %%
-percentage_above_threshold_fig_baseline = plot_percentage_above_threshold(heatmap_baseline, threshold=mean_max_baseline, ut=False)
-percentage_above_threshold_fig_baseline.update_layout(autosize=False, width=1800, height=1500)
-percentage_above_threshold_fig_baseline.show()
-
 # %%
 
 def kl_divergence(p, q):
@@ -663,16 +554,6 @@ def plot_top_component_overlap(heatmap, top_n=3, ut=True):
     return fig, overlap
 
 # %%
-top_component_overlap_fig_moeut, overlaps_moeut = plot_top_component_overlap(heatmap_moeut, top_n=3, ut=True)
-top_component_overlap_fig_moeut.update_layout(autosize=False, width=1200, height=800)
-top_component_overlap_fig_moeut.show()
-
-# %%
-top_component_overlap_fig_baseline, overlaps_baseline = plot_top_component_overlap(heatmap_baseline, top_n=3, ut=False)
-top_component_overlap_fig_baseline.update_layout(autosize=False, width=3000, height=1500)
-top_component_overlap_fig_baseline.show()
-
-# %%
 # plot average cosine similarity for each layer pair
 def plot_average_diversity(overlaps, ut=True, cmin=-1, cmax=1):
     n_layers = overlaps.shape[0]
@@ -700,6 +581,134 @@ def plot_average_diversity(overlaps, ut=True, cmin=-1, cmax=1):
     return fig
 
 # %%
+layer_weights_path_moeut = "analysis_out/dump_slimpajama_moeut_small_matched_rope_noln_long/layer_weights.pth"
+layer_weights_path_baseline = (
+    "analysis_out/dump_slimpajama_baseline_small_rope_long_nodrop_3/layer_weights.pth"
+)
+layer_weights_path_moeut_g16 = "analysis_out/dump_slimpajama_moeut_small_g16/layer_weights.pth"
+layer_weights_path_baseline_20heads = (
+    "analysis_out/dump_slimpajama_baseline_small_20heads/layer_weights.pth"
+)
+# %%
+
+layer_weights_moeut, heatmap_moeut = get_weights_and_heatmap_from_path(layer_weights_path_moeut)
+layer_weights_baseline, heatmap_baseline = get_weights_and_heatmap_from_path(layer_weights_path_baseline)
+
+# %%
+# randoms for moeut
+d_embed = layer_weights_moeut[0]["d_embed"]
+d_head = layer_weights_moeut[0]["d_head"]
+maxes_moeut, means_moeut = random_composition_scores(d_embed, d_head, n_runs=10)
+mean_max_moeut = np.mean(maxes_moeut)
+mean_mean_moeut = np.mean(means_moeut)
+print(f"Mean of max composition score for random MoeUT: {mean_max_moeut} ± {np.std(maxes_moeut)}")
+print(f"Mean of mean composition score for random MoeUT: {mean_mean_moeut} ± {np.std(means_moeut)}")
+
+# %%
+# randoms for baseline
+d_embed = layer_weights_baseline[0]["d_embed"]
+d_head = layer_weights_baseline[0]["d_head"]
+maxes_baseline, means_baseline = random_composition_scores(d_embed, d_head, n_runs=10)
+mean_max_baseline = np.mean(maxes_baseline)
+mean_mean_baseline = np.mean(means_baseline)
+print(f"Mean of max composition score for random Baseline: {mean_max_baseline} ± {np.std(maxes_baseline)}")
+print(f"Mean of mean composition score for random Baseline: {mean_mean_baseline} ± {np.std(means_baseline)}")
+
+
+# %%
+heatmap_grid_fig = plot_heatmap_grid(heatmap_moeut, ut=True, subtract=mean_max_moeut, log_scale=False)
+# heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500)
+heatmap_grid_fig.show()
+
+# %%
+heatmap_grid_fig = plot_heatmap_grid(heatmap_baseline, ut=False, subtract=mean_max_baseline, log_scale=False)
+heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500)
+heatmap_grid_fig.show()
+
+# # %%
+# # plot for a single layer, e.g. 0.OV to 1.QK
+# layer_from = 0
+# layer_to = 1
+# comp_scores_fig = plot_composition_scores_by_component(heatmap_moeut, layer_from, layer_to, hline=mean_max_moeut)
+# comp_scores_fig.update_layout(autosize=False, width=1200, height=800)
+# comp_scores_fig.show()
+
+# # %%
+# # plot for baseline: 4.OV to 5.QK
+# layer_from = 4
+# layer_to = 5
+# comp_scores_fig = plot_composition_scores_by_component(heatmap_baseline, layer_from, layer_to, hline=mean_max_baseline)
+# comp_scores_fig.update_layout(autosize=False, width=1200, height=800)
+# comp_scores_fig.show()
+
+# # %%
+# layer_from = 0
+# layer_to = 1
+# threshold = mean_max_moeut
+# percentage_fig_moeut = plot_percentage_above_threshold(heatmap_moeut, layer_from, layer_to, threshold)
+# percentage_fig_moeut.update_layout(autosize=False, width=1200, height=800)
+# percentage_fig_moeut.show()
+
+
+# %%
+# percentage of components above threshold for moeut
+for i in range(heatmap_moeut.shape[0]):
+    for j in range(heatmap_moeut.shape[1]):
+        print(f"Layer {i} to {j}: {heatmap_moeut[i, j].shape}")
+        print(f"Mean composition score: {heatmap_moeut[i, j].mean().item()}")
+        print(f"Max composition score: {heatmap_moeut[i, j].max().item()}")
+        num_above = (heatmap_moeut[i, j] > mean_mean_moeut).sum()
+        num_total = heatmap_moeut[i, j].size
+        # percentage of components above threshold
+        percentage = num_above / num_total * 100
+        print(f"Components above mean-mean random threshold {mean_mean_moeut}: {num_above}/{num_total} ({percentage:.2f}%)")
+
+# %%
+# percentage of components above threshold for baseline
+for i in range(heatmap_baseline.shape[0]):
+    for j in range(i+1, heatmap_baseline.shape[1]):
+        print(f"Layer {i} to {j}: {heatmap_baseline[i, j].shape}")
+        print(f"Mean composition score: {heatmap_baseline[i, j].mean().item()}")
+        print(f"Max composition score: {heatmap_baseline[i, j].max().item()}")
+        num_above = (heatmap_baseline[i, j] > mean_mean_baseline).sum()
+        num_total = heatmap_baseline[i, j].size
+        # percentage of components above threshold
+        percentage = num_above / num_total * 100
+        print(f"Components above mean-mean random threshold {mean_mean_baseline}: {num_above}/{num_total} ({percentage:.2f}%)")
+
+
+# # %%
+# top_components_fig_moeut = plot_top_components(heatmap_moeut, top_n=3, ut=True)
+# top_components_fig_moeut.update_layout(autosize=False, width=1200, height=800)
+# top_components_fig_moeut.show()
+
+# # %%
+# top_components_fig_baseline = plot_top_components(heatmap_baseline, top_n=3, ut=True)
+# top_components_fig_baseline.update_layout(autosize=False, width=1800, height=1500)
+# top_components_fig_baseline.show()
+
+
+# %%
+percentage_above_threshold_fig_moeut = plot_percentage_above_threshold(heatmap_moeut, threshold=mean_max_moeut, ut=True)
+percentage_above_threshold_fig_moeut.update_layout(autosize=False, width=1200, height=800)
+percentage_above_threshold_fig_moeut.show()
+
+# %%
+percentage_above_threshold_fig_baseline = plot_percentage_above_threshold(heatmap_baseline, threshold=mean_max_baseline, ut=False)
+percentage_above_threshold_fig_baseline.update_layout(autosize=False, width=1800, height=1500)
+percentage_above_threshold_fig_baseline.show()
+
+# %%
+top_component_overlap_fig_moeut, overlaps_moeut = plot_top_component_overlap(heatmap_moeut, top_n=3, ut=True)
+top_component_overlap_fig_moeut.update_layout(autosize=False, width=1200, height=800)
+top_component_overlap_fig_moeut.show()
+
+# %%
+top_component_overlap_fig_baseline, overlaps_baseline = plot_top_component_overlap(heatmap_baseline, top_n=3, ut=False)
+top_component_overlap_fig_baseline.update_layout(autosize=False, width=3000, height=1500)
+top_component_overlap_fig_baseline.show()
+
+# %%
 cmin = min(overlaps_moeut.mean((2,3,4,5)).min(), overlaps_baseline.mean((2,3,4,5)).min())
 cmax = max(overlaps_moeut.mean((2,3,4,5)).max(), overlaps_baseline.mean((2,3,4,5)).max())
 avg_kl_divergence_fig_moeut = plot_average_diversity(overlaps_moeut, ut=True, cmin=cmin, cmax=cmax)
@@ -711,33 +720,5 @@ avg_kl_divergence_fig_baseline = plot_average_diversity(overlaps_baseline, ut=Fa
 # avg_kl_divergence_fig_baseline.update_layout(autosize=False, width=800, height=1500)
 avg_kl_divergence_fig_baseline.show()
 
-# src_layer, src_head = 8, 6  # gpt 2 small
-# src_usv = model.blocks[src_layer].attn.OV[src_head].svd()
-# dest_layer, dest_head = 9, 9
-# decomp = True
-# dest_usv = model.blocks[dest_layer].attn.QK[dest_head].svd()
-
-# comp_idx = 0  # gpt2 small
-# if decomp:
-#     print("decomposing right side to comp", comp_idx)
-#     right = re_get_single_component(*dest_usv, comp_idx)
-# #
-
-
-# scores = []
-
-# exh = True
-# if exh:
-#     heatmap = exhaustive_heatmap(dest_layer, right)
-# else:
-#     heatmap = simple_heatmap(dest_layer, right)
-# # %%
-# title = f"Composition Scores to {dest_layer}.{dest_head}"
-# if decomp:
-#     title = f"Composition Scores to {dest_layer}.{dest_head}.{comp_idx}"
-# heatmap = imshow(heatmap, return_fig=True, xaxis="Head", yaxis="Layer", title=title)
-
-# heatmap.show()
-# pio.write_image(heatmap, f"out", format="jpg")
 
 # %%
