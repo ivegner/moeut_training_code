@@ -591,39 +591,27 @@ layer_weights_path_baseline_20heads = (
 )
 # %%
 
-layer_weights_moeut, heatmap_moeut = get_weights_and_heatmap_from_path(layer_weights_path_moeut)
-layer_weights_baseline, heatmap_baseline = get_weights_and_heatmap_from_path(layer_weights_path_baseline)
+# layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path_moeut)
+layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path_baseline)
+# IS_UT = True
+IS_UT = False
+# layer_weights_baseline, heatmap_baseline = get_weights_and_heatmap_from_path(layer_weights_path_baseline)
 
 # %%
-# randoms for moeut
-d_embed = layer_weights_moeut[0]["d_embed"]
-d_head = layer_weights_moeut[0]["d_head"]
-maxes_moeut, means_moeut = random_composition_scores(d_embed, d_head, n_runs=10)
-mean_max_moeut = np.mean(maxes_moeut)
-mean_mean_moeut = np.mean(means_moeut)
-print(f"Mean of max composition score for random MoeUT: {mean_max_moeut} ± {np.std(maxes_moeut)}")
-print(f"Mean of mean composition score for random MoeUT: {mean_mean_moeut} ± {np.std(means_moeut)}")
+# randoms
+d_embed = layer_weights[0]["d_embed"]
+d_head = layer_weights[0]["d_head"]
+maxes, means = random_composition_scores(d_embed, d_head, n_runs=10)
+mean_max = np.mean(maxes)
+mean_mean = np.mean(means)
+print(f"Mean of max composition score: {mean_max} ± {np.std(maxes)}")
+print(f"Mean of mean composition score: {mean_mean} ± {np.std(means)}")
 
 # %%
-# randoms for baseline
-d_embed = layer_weights_baseline[0]["d_embed"]
-d_head = layer_weights_baseline[0]["d_head"]
-maxes_baseline, means_baseline = random_composition_scores(d_embed, d_head, n_runs=10)
-mean_max_baseline = np.mean(maxes_baseline)
-mean_mean_baseline = np.mean(means_baseline)
-print(f"Mean of max composition score for random Baseline: {mean_max_baseline} ± {np.std(maxes_baseline)}")
-print(f"Mean of mean composition score for random Baseline: {mean_mean_baseline} ± {np.std(means_baseline)}")
-
-
-# %%
-heatmap_grid_fig = plot_heatmap_grid(heatmap_moeut, ut=True, subtract=mean_max_moeut, log_scale=False)
-# heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500)
-heatmap_grid_fig.show()
-
-# %%
-heatmap_grid_fig = plot_heatmap_grid(heatmap_baseline, ut=False, subtract=mean_max_baseline, log_scale=False)
+heatmap_grid_fig = plot_heatmap_grid(heatmap, ut=IS_UT, subtract=mean_max, log_scale=False)
 heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500)
 heatmap_grid_fig.show()
+
 
 # # %%
 # # plot for a single layer, e.g. 0.OV to 1.QK
@@ -652,30 +640,16 @@ heatmap_grid_fig.show()
 
 # %%
 # percentage of components above threshold for moeut
-for i in range(heatmap_moeut.shape[0]):
-    for j in range(heatmap_moeut.shape[1]):
-        print(f"Layer {i} to {j}: {heatmap_moeut[i, j].shape}")
-        print(f"Mean composition score: {heatmap_moeut[i, j].mean().item()}")
-        print(f"Max composition score: {heatmap_moeut[i, j].max().item()}")
-        num_above = (heatmap_moeut[i, j] > mean_mean_moeut).sum()
-        num_total = heatmap_moeut[i, j].size
+for i in range(heatmap.shape[0]):
+    for j in range(0 if IS_UT else i+1, heatmap.shape[1]):
+        print(f"Layer {i} to {j}: {heatmap[i, j].shape}")
+        print(f"Mean composition score: {heatmap[i, j].mean().item()}")
+        print(f"Max composition score: {heatmap[i, j].max().item()}")
+        num_above = (heatmap[i, j] > mean_mean).sum()
+        num_total = heatmap[i, j].size
         # percentage of components above threshold
         percentage = num_above / num_total * 100
-        print(f"Components above mean-mean random threshold {mean_mean_moeut}: {num_above}/{num_total} ({percentage:.2f}%)")
-
-# %%
-# percentage of components above threshold for baseline
-for i in range(heatmap_baseline.shape[0]):
-    for j in range(i+1, heatmap_baseline.shape[1]):
-        print(f"Layer {i} to {j}: {heatmap_baseline[i, j].shape}")
-        print(f"Mean composition score: {heatmap_baseline[i, j].mean().item()}")
-        print(f"Max composition score: {heatmap_baseline[i, j].max().item()}")
-        num_above = (heatmap_baseline[i, j] > mean_mean_baseline).sum()
-        num_total = heatmap_baseline[i, j].size
-        # percentage of components above threshold
-        percentage = num_above / num_total * 100
-        print(f"Components above mean-mean random threshold {mean_mean_baseline}: {num_above}/{num_total} ({percentage:.2f}%)")
-
+        print(f"Components above mean-mean random threshold {mean_mean}: {num_above}/{num_total} ({percentage:.2f}%)")
 
 # # %%
 # top_components_fig_moeut = plot_top_components(heatmap_moeut, top_n=3, ut=True)
@@ -689,36 +663,30 @@ for i in range(heatmap_baseline.shape[0]):
 
 
 # %%
-percentage_above_threshold_fig_moeut = plot_percentage_above_threshold(heatmap_moeut, threshold=mean_max_moeut, ut=True)
-percentage_above_threshold_fig_moeut.update_layout(autosize=False, width=1200, height=800)
-percentage_above_threshold_fig_moeut.show()
+percentage_above_threshold_fig = plot_percentage_above_threshold(heatmap, threshold=mean_max, ut=IS_UT)
+percentage_above_threshold_fig.update_layout(autosize=False, width=1200, height=800)
+percentage_above_threshold_fig.show()
+
+# # %%
+# percentage_above_threshold_fig_baseline = plot_percentage_above_threshold(heatmap_baseline, threshold=mean_max_baseline, ut=False)
+# percentage_above_threshold_fig_baseline.update_layout(autosize=False, width=1800, height=1500)
+# percentage_above_threshold_fig_baseline.show()
 
 # %%
-percentage_above_threshold_fig_baseline = plot_percentage_above_threshold(heatmap_baseline, threshold=mean_max_baseline, ut=False)
-percentage_above_threshold_fig_baseline.update_layout(autosize=False, width=1800, height=1500)
-percentage_above_threshold_fig_baseline.show()
+top_component_overlap_fig, overlaps = plot_top_component_overlap(heatmap, top_n=3, ut=IS_UT)
+top_component_overlap_fig.update_layout(autosize=False, width=1200, height=800)
+top_component_overlap_fig.show()
 
 # %%
-top_component_overlap_fig_moeut, overlaps_moeut = plot_top_component_overlap(heatmap_moeut, top_n=3, ut=True)
-top_component_overlap_fig_moeut.update_layout(autosize=False, width=1200, height=800)
-top_component_overlap_fig_moeut.show()
+# top_component_overlap_fig_baseline, overlaps_baseline = plot_top_component_overlap(heatmap_baseline, top_n=3, ut=False)
+# top_component_overlap_fig_baseline.update_layout(autosize=False, width=3000, height=1500)
+# top_component_overlap_fig_baseline.show()
 
 # %%
-top_component_overlap_fig_baseline, overlaps_baseline = plot_top_component_overlap(heatmap_baseline, top_n=3, ut=False)
-top_component_overlap_fig_baseline.update_layout(autosize=False, width=3000, height=1500)
-top_component_overlap_fig_baseline.show()
-
-# %%
-cmin = min(overlaps_moeut.mean((2,3,4,5)).min(), overlaps_baseline.mean((2,3,4,5)).min())
-cmax = max(overlaps_moeut.mean((2,3,4,5)).max(), overlaps_baseline.mean((2,3,4,5)).max())
-avg_kl_divergence_fig_moeut = plot_average_diversity(overlaps_moeut, ut=True, cmin=cmin, cmax=cmax)
-# avg_kl_divergence_fig_moeut.update_layout(autosize=False, width=800, height=800)
-avg_kl_divergence_fig_moeut.show()
-
-# %%
-avg_kl_divergence_fig_baseline = plot_average_diversity(overlaps_baseline, ut=False, cmin=cmin, cmax=cmax)
-# avg_kl_divergence_fig_baseline.update_layout(autosize=False, width=800, height=1500)
-avg_kl_divergence_fig_baseline.show()
-
+cmin = 0.0 #min(overlaps_moeut.mean((2,3,4,5)).min(), overlaps_baseline.mean((2,3,4,5)).min())
+cmax = 0.4 #max(overlaps_moeut.mean((2,3,4,5)).max(), overlaps_baseline.mean((2,3,4,5)).max())
+avg_kl_divergence_fig = plot_average_diversity(overlaps, ut=IS_UT, cmin=cmin, cmax=cmax)
+# avg_kl_divergence_fig.update_layout(autosize=False, width=800, height=800)
+avg_kl_divergence_fig.show()
 
 # %%
