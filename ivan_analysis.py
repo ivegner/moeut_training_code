@@ -102,8 +102,8 @@ def exhaustive_heatmap(dest_layer, right):
 
 
 # create a heatmap of all heads in all layers
-def very_exhaustive_heatmap(layer_weights, ut=True):
-    if ut:
+def very_exhaustive_heatmap(layer_weights, is_moeut=True, all_to_all=True):
+    if is_moeut:
         n_experts = layer_weights[0]["n_experts"]["v"]
         assert (
             n_experts == layer_weights[0]["n_experts"]["o"]
@@ -119,7 +119,7 @@ def very_exhaustive_heatmap(layer_weights, ut=True):
     with torch.no_grad():
         for i, layer_from in enumerate(layer_weights):
             for j, layer_to in enumerate(layer_weights):
-                if not ut and i >= j:
+                if not all_to_all and i >= j:
                     # if not universal transformer, only compute for
                     # layers after layer_from
                     continue
@@ -147,13 +147,12 @@ def very_exhaustive_heatmap(layer_weights, ut=True):
 
     return heatmap
 
-def get_weights_and_heatmap_from_path(layer_weights_path):
+def get_weights_and_heatmap_from_path(layer_weights_path, all_to_all=False):
     weights = torch.load(layer_weights_path, weights_only=False, map_location=device)
-    p = Path(layer_weights_path)
     # heatmap is saved next to the layer_weights
-    heatmap_path = p.with_name("heatmap.pkl")
+    heatmap_path = Path(layer_weights_path).with_name("heatmap.pkl")
     if not heatmap_path.exists():
-        heatmap = very_exhaustive_heatmap(weights, ut="moeut" in layer_weights_path)
+        heatmap = very_exhaustive_heatmap(weights, is_moeut="moeut" in layer_weights_path, all_to_all=all_to_all)
         with open(heatmap_path, "wb") as f:
             torch.save(heatmap, f)
     else:
@@ -195,7 +194,7 @@ def random_composition_scores(d_embed, d_head, n_runs=10):
             "n_experts": {"v": 1, "o": 1},
         }
         # Compute composition scores
-        heatmap = very_exhaustive_heatmap([layer_weights], ut=True) # (1,1,1,1,d_head)
+        heatmap = very_exhaustive_heatmap([layer_weights], is_moeut=True, all_to_all=True) # (1,1,1,1,d_head)
         heatmap = heatmap.squeeze((0, 1, 2, 3))
         _max = heatmap.max().item()
         _mean = heatmap.mean().item()
@@ -205,13 +204,13 @@ def random_composition_scores(d_embed, d_head, n_runs=10):
 
 # %%
 # plot on a 2d grid of heatmaps, x=layer from, y=layer to
-def plot_heatmap_grid(heatmap, ut=True, subtract=None, log_scale=False):
+def plot_heatmap_grid(heatmap, all_to_all=True, subtract=None, log_scale=False):
     n_layers = heatmap.shape[0]
     pairs = [(i, j) for i in range(n_layers) for j in range(n_layers)]
     fig = make_subplots(
         rows=n_layers,
         cols=n_layers,
-        subplot_titles=[f"{i}.OV -> {j}.QK" if (ut or i < j) else "" for i, j in pairs],
+        subplot_titles=[f"{i}.OV -> {j}.QK" if (all_to_all or i < j) else "" for i, j in pairs],
     )
 
     h = heatmap.max(axis=-1)
@@ -225,7 +224,7 @@ def plot_heatmap_grid(heatmap, ut=True, subtract=None, log_scale=False):
 
     for i in range(n_layers):
         for j in range(n_layers):
-            if not ut and i >= j:
+            if not all_to_all and i >= j:
                 continue
             fig.add_trace(
                 go.Heatmap(
@@ -255,7 +254,7 @@ def plot_heatmap_grid(heatmap, ut=True, subtract=None, log_scale=False):
                 row=i + 1,
                 col=j + 1,
             )
-    fig.update_layout(title="Composition Scores Heatmap Grid (max over components)")
+    fig.update_layout(title="Composition Scores Heatmap Grid (max over components)" + " Subtracted Mean Max" if subtract is not None else "")
     # , xaxis_title="OV Head", yaxis_title="QK Head")
 
     fig.data[-1].update(colorbar=dict(x=1.05, y=0.5, thickness=20), showscale=True)
@@ -308,48 +307,48 @@ def plot_composition_scores_by_component(heatmap, layer_from, layer_to, hline: f
     return fig
 
 
-# %%
-# For each OV-QK pair, plot percentage of components that have a composition score above threshold
-def plot_percentage_above_threshold(heatmap, layer_from, layer_to, threshold=0):
-    h = heatmap[layer_from, layer_to]
-    n_ov = h.shape[0]
-    n_qk = h.shape[1]
+# # %%
+# # For each OV-QK pair, plot percentage of components that have a composition score above threshold
+# def plot_percentage_above_threshold(heatmap, layer_from, layer_to, threshold=0):
+#     h = heatmap[layer_from, layer_to]
+#     n_ov = h.shape[0]
+#     n_qk = h.shape[1]
 
-    percentages = []
-    for ov in range(n_ov):
-        for qk in range(n_qk):
-            scores = h[ov, qk]
-            percentage = (scores > threshold).sum() / len(scores) * 100
-            percentages.append((str(ov), str(qk), percentage))
+#     percentages = []
+#     for ov in range(n_ov):
+#         for qk in range(n_qk):
+#             scores = h[ov, qk]
+#             percentage = (scores > threshold).sum() / len(scores) * 100
+#             percentages.append((str(ov), str(qk), percentage))
 
-    df = pd.DataFrame(percentages, columns=["OV Head", "QK Head", "Percentage"])
-    fig = px.bar(
-        df,
-        x="OV Head",
-        y="Percentage",
-        color="QK Head",
-        title=f"Percentage of Components with Composition Score > {threshold} from {layer_from}.OV to {layer_to}.QK",
-        labels={"OV Head": "OV Head", "Percentage": "Percentage (%)"},
-        barmode="group",  # Side by side bars
-    )
-    print(f"Mean percentage of components above threshold {threshold}: {df['Percentage'].mean():.2f}%")
-    return fig
+#     df = pd.DataFrame(percentages, columns=["OV Head", "QK Head", "Percentage"])
+#     fig = px.bar(
+#         df,
+#         x="OV Head",
+#         y="Percentage",
+#         color="QK Head",
+#         title=f"Percentage of Components with Composition Score > {threshold} from {layer_from}.OV to {layer_to}.QK",
+#         labels={"OV Head": "OV Head", "Percentage": "Percentage (%)"},
+#         barmode="group",  # Side by side bars
+#     )
+#     print(f"Mean percentage of components above threshold {threshold}: {df['Percentage'].mean():.2f}%")
+#     return fig
 
 
 # %%
 # For all OV-QK pairs, plot the indices of top-3 components by composition score.
 # For each subplot: x-axis is QK-OV pair, y-axis is component index, color is composition score.
-def plot_top_components(heatmap, top_n=3, ut=True):
+def plot_top_components(heatmap, top_n=3, all_to_all=True):
     n_layers = heatmap.shape[0]
     pairs = [(i, j) for i in range(n_layers) for j in range(n_layers)]
     fig = make_subplots(
         rows=n_layers,
         cols=n_layers,
-        subplot_titles=[f"{i}.OV -> {j}.QK" if (ut or i < j) else "" for i, j in pairs],
+        subplot_titles=[f"{i}.OV -> {j}.QK" if (all_to_all or i < j) else "" for i, j in pairs],
     )
     for i in range(n_layers):
         for j in range(n_layers):
-            if not ut and i >= j:
+            if not all_to_all and i >= j:
                 continue
             h = heatmap[i, j]
             n_ov = h.shape[0]
@@ -389,17 +388,17 @@ def plot_top_components(heatmap, top_n=3, ut=True):
 
 # %%
 # Plot percentage of components that have a composition score above threshold for each OV-QK pair
-def plot_percentage_above_threshold(heatmap, threshold=0, ut=True):
+def plot_percentage_above_threshold(heatmap, threshold=0, all_to_all=True):
     n_layers = heatmap.shape[0]
     pairs = [(i, j) for i in range(n_layers) for j in range(n_layers)]
     fig = make_subplots(
         rows=n_layers,
         cols=n_layers,
-        subplot_titles=[f"{i}.OV -> {j}.QK" if (ut or i < j) else "" for i, j in pairs],
+        subplot_titles=[f"{i}.OV -> {j}.QK" if (all_to_all or i < j) else "" for i, j in pairs],
     )
     for i in range(n_layers):
         for j in range(n_layers):
-            if not ut and i >= j:
+            if not all_to_all and i >= j:
                 continue
             h = heatmap[i, j]
             n_ov = h.shape[0]
@@ -478,13 +477,13 @@ def compute_overlap(a, b):
     return intersection / union if union > 0 else 0
 
 # For a given pair of layers, take pairs of OV-QK heads. Plot overlap between top components
-def plot_top_component_overlap(heatmap, top_n=3, ut=True):
+def plot_top_component_overlap(heatmap, top_n=3, all_to_all=True):
     n_layers = heatmap.shape[0]
 
     overlap = -np.empty((n_layers, n_layers, heatmap.shape[2], heatmap.shape[3], heatmap.shape[2], heatmap.shape[3]))
     for i in range(n_layers):
         for j in range(n_layers):
-            if not ut and i >= j:
+            if not all_to_all and i >= j:
                 continue
             h = heatmap[i, j]
             n_ov = h.shape[0]
@@ -514,11 +513,11 @@ def plot_top_component_overlap(heatmap, top_n=3, ut=True):
     fig = make_subplots(
         rows=n_layers,
         cols=n_layers,
-        subplot_titles=[f"{i}.OV -> {j}.QK (avg: {overlap[i, j].mean():.2f}↓)" if (ut or i < j) else "" for i, j in pairs],
+        subplot_titles=[f"{i}.OV -> {j}.QK (avg: {overlap[i, j].mean():.2f}↓)" if (all_to_all or i < j) else "" for i, j in pairs],
     )
     for i in range(n_layers):
         for j in range(n_layers):
-            if not ut and i >= j:
+            if not all_to_all and i >= j:
                 continue
             # create a heatmap of overlaps
             cmin = overlap.min()
@@ -547,7 +546,7 @@ def plot_top_component_overlap(heatmap, top_n=3, ut=True):
     fig.data[-1].update(colorbar=dict(x=1.05, y=0.5, thickness=20), showscale=True)
 
     fig.update_layout(
-        title="Component Weighting Overlap Heatmap (IOU of top-5 component indices)", #(KL Divergence over Normed Scores)",
+        title="Component Weighting Overlap Heatmap (IOU of top-5 component indices). For a given OV-QK pairing, to what extent do different heads pay attention to the same top 5 components?",
         font=dict(size=12),  # Reduce overall font size including subplot titles
     )
 
@@ -555,7 +554,7 @@ def plot_top_component_overlap(heatmap, top_n=3, ut=True):
 
 # %%
 # plot average cosine similarity for each layer pair
-def plot_average_diversity(overlaps, ut=True, cmin=-1, cmax=1):
+def plot_average_diversity(overlaps, cmin=-1, cmax=1):
     n_layers = overlaps.shape[0]
     avg_diversity = overlaps.mean(axis=(2, 3, 4, 5))  # Average over OV and QK heads
 
@@ -567,7 +566,7 @@ def plot_average_diversity(overlaps, ut=True, cmin=-1, cmax=1):
         zmin=cmin,
         zmax=cmax,
         color_continuous_scale="Viridis",
-        labels={"x": "Layer From", "y": "Layer To", "color": "Average Overlap"},
+        labels={"x": "Layer To", "y": "Layer From", "color": "Average Overlap"},
         title="Average Overlap of Component Weightings Between All OV-QK Pairs in Each Layer Pair",
         aspect="auto",
         text_auto=".2f",
@@ -592,9 +591,10 @@ layer_weights_path_baseline_20heads = (
 # %%
 
 # layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path_moeut)
-layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path_baseline)
+layer_weights_path = layer_weights_path_baseline_20heads
+ALL_TO_ALL = False
+layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path, all_to_all=ALL_TO_ALL)
 # IS_UT = True
-IS_UT = False
 # layer_weights_baseline, heatmap_baseline = get_weights_and_heatmap_from_path(layer_weights_path_baseline)
 
 # %%
@@ -608,8 +608,11 @@ print(f"Mean of max composition score: {mean_max} ± {np.std(maxes)}")
 print(f"Mean of mean composition score: {mean_mean} ± {np.std(means)}")
 
 # %%
-heatmap_grid_fig = plot_heatmap_grid(heatmap, ut=IS_UT, subtract=mean_max, log_scale=False)
-heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500)
+heatmap_grid_fig = plot_heatmap_grid(heatmap, all_to_all=ALL_TO_ALL, subtract=mean_max, log_scale=False)
+heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500,
+    title=f"Composition Scores Heatmap Grid (max over components), minus expected max comp. score of two random matrices ({mean_max:.2f})")
+_save_path = Path(layer_weights_path).with_name("heatmap_sub_meanmax.png")
+heatmap_grid_fig.write_image(_save_path, "png", scale=2, width=1800, height=1500)
 heatmap_grid_fig.show()
 
 
@@ -641,7 +644,7 @@ heatmap_grid_fig.show()
 # %%
 # percentage of components above threshold for moeut
 for i in range(heatmap.shape[0]):
-    for j in range(0 if IS_UT else i+1, heatmap.shape[1]):
+    for j in range(0 if ALL_TO_ALL else i+1, heatmap.shape[1]):
         print(f"Layer {i} to {j}: {heatmap[i, j].shape}")
         print(f"Mean composition score: {heatmap[i, j].mean().item()}")
         print(f"Max composition score: {heatmap[i, j].max().item()}")
@@ -663,8 +666,11 @@ for i in range(heatmap.shape[0]):
 
 
 # %%
-percentage_above_threshold_fig = plot_percentage_above_threshold(heatmap, threshold=mean_max, ut=IS_UT)
-percentage_above_threshold_fig.update_layout(autosize=False, width=1200, height=800)
+percentage_above_threshold_fig = plot_percentage_above_threshold(heatmap, threshold=mean_max, all_to_all=ALL_TO_ALL)
+percentage_above_threshold_fig.update_layout(autosize=False, width=1200, height=800,
+   title=f"Percentage of Components Above Expected Max Composition Score for Random Matrices ({mean_max:.2f})")
+_save_path = Path(layer_weights_path).with_name("pct_above_threshold.png")
+percentage_above_threshold_fig.write_image(_save_path, "png", scale=2, width=1800, height=1500)
 percentage_above_threshold_fig.show()
 
 # # %%
@@ -673,8 +679,10 @@ percentage_above_threshold_fig.show()
 # percentage_above_threshold_fig_baseline.show()
 
 # %%
-top_component_overlap_fig, overlaps = plot_top_component_overlap(heatmap, top_n=3, ut=IS_UT)
-top_component_overlap_fig.update_layout(autosize=False, width=1200, height=800)
+top_component_overlap_fig, overlaps = plot_top_component_overlap(heatmap, top_n=5, all_to_all=ALL_TO_ALL)
+top_component_overlap_fig.update_layout(autosize=False, width=3200, height=1500)
+_save_path = Path(layer_weights_path).with_name("top_component_overlap.png")
+# top_component_overlap_fig.write_image(_save_path, "png", scale=1, width=3200, height=1500)
 top_component_overlap_fig.show()
 
 # %%
@@ -685,8 +693,10 @@ top_component_overlap_fig.show()
 # %%
 cmin = 0.0 #min(overlaps_moeut.mean((2,3,4,5)).min(), overlaps_baseline.mean((2,3,4,5)).min())
 cmax = 0.4 #max(overlaps_moeut.mean((2,3,4,5)).max(), overlaps_baseline.mean((2,3,4,5)).max())
-avg_kl_divergence_fig = plot_average_diversity(overlaps, ut=IS_UT, cmin=cmin, cmax=cmax)
+avg_kl_divergence_fig = plot_average_diversity(overlaps, cmin=cmin, cmax=cmax)
 # avg_kl_divergence_fig.update_layout(autosize=False, width=800, height=800)
+_save_path = Path(layer_weights_path).with_name("avg_diversity.png")
+avg_kl_divergence_fig.write_image(_save_path, "png", scale=2, width=1800, height=1500)
 avg_kl_divergence_fig.show()
 
 # %%

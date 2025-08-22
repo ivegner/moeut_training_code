@@ -44,6 +44,7 @@ pillow = "*"
 ninja = "*"
 moviepy = "*"
 python-hostlist = "*"
+kaleido = "*"
 
 #[target.osx.pypi-dependencies]
 # OSX has no CUDA support so use the CPU here
