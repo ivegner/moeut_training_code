@@ -460,15 +460,12 @@ def kl_divergence(p, q):
 #     a = a / np.sum(a)
 #     b = b / np.sum(b)
 #     return kl_divergence(a, b)
-def compute_overlap(a, b):
-    """Norm a and b and compute kl divergence between them."""
+def compute_overlap(a, b, top_n=3):
     a = np.array(a)
     b = np.array(b)
-    # top k=5
-    top_k = 5
-    top_a_indices = np.argsort(a)[-top_k:][::-1]
+    top_a_indices = np.argsort(a)[-top_n:][::-1]
     # top_a_scores = a[top_a_indices]
-    top_b_indices = np.argsort(b)[-top_k:][::-1]
+    top_b_indices = np.argsort(b)[-top_n:][::-1]
     # top_b_scores = b[top_b_indices]
 
     # return IOU
@@ -505,7 +502,7 @@ def plot_top_component_overlap(heatmap, top_n=3, all_to_all=True):
                             # overlap = len(set(top_indices) & set(top_indices2))
 
                             # overlap = cosine sim between scores and scores2
-                            o = compute_overlap(scores, scores2)
+                            o = compute_overlap(scores, scores2, top_n=top_n)
 
                             overlap[i, j, ov, qk, ov2, qk2] = o
 
@@ -546,7 +543,7 @@ def plot_top_component_overlap(heatmap, top_n=3, all_to_all=True):
     fig.data[-1].update(colorbar=dict(x=1.05, y=0.5, thickness=20), showscale=True)
 
     fig.update_layout(
-        title="Component Weighting Overlap Heatmap (IOU of top-5 component indices). For a given OV-QK pairing, to what extent do different heads pay attention to the same top 5 components?",
+        title=f"Component Weighting Overlap Heatmap (IOU of top-{top_n} component indices). For a given OV-QK pairing, to what extent do different heads pay attention to the same top {top_n} components?",
         font=dict(size=12),  # Reduce overall font size including subplot titles
     )
 
@@ -679,10 +676,11 @@ percentage_above_threshold_fig.show()
 # percentage_above_threshold_fig_baseline.show()
 
 # %%
-top_component_overlap_fig, overlaps = plot_top_component_overlap(heatmap, top_n=5, all_to_all=ALL_TO_ALL)
+TOP_N=1
+top_component_overlap_fig, overlaps = plot_top_component_overlap(heatmap, top_n=TOP_N, all_to_all=ALL_TO_ALL)
 top_component_overlap_fig.update_layout(autosize=False, width=3200, height=1500)
-_save_path = Path(layer_weights_path).with_name("top_component_overlap.png")
-# top_component_overlap_fig.write_image(_save_path, "png", scale=1, width=3200, height=1500)
+_save_path = Path(layer_weights_path).with_name(f"top_{TOP_N}_component_overlap.png")
+top_component_overlap_fig.write_image(_save_path, "png", scale=1, width=3200, height=1500)
 top_component_overlap_fig.show()
 
 # %%
@@ -695,8 +693,38 @@ cmin = 0.0 #min(overlaps_moeut.mean((2,3,4,5)).min(), overlaps_baseline.mean((2,
 cmax = 0.4 #max(overlaps_moeut.mean((2,3,4,5)).max(), overlaps_baseline.mean((2,3,4,5)).max())
 avg_kl_divergence_fig = plot_average_diversity(overlaps, cmin=cmin, cmax=cmax)
 # avg_kl_divergence_fig.update_layout(autosize=False, width=800, height=800)
-_save_path = Path(layer_weights_path).with_name("avg_diversity.png")
-avg_kl_divergence_fig.write_image(_save_path, "png", scale=2, width=1800, height=1500)
+_save_path = Path(layer_weights_path).with_name(f"avg_diversity_top{TOP_N}.jpg")
+avg_kl_divergence_fig.write_image(_save_path, "jpg", scale=2, width=1800, height=1500)
 avg_kl_divergence_fig.show()
 
 # %%
+## What we want to check is whether two heads in the same OV-QK pairing are communicating along orthogonal
+# information channels. We get at this by checking whether the subspace to which the OV writes and the QK reads is
+# orthogonal to those of the other OV-QK pairs.
+
+layer_from = 0
+layer_to = 1
+
+# plot weightings of components across all pairs of OV-QK
+h_from_to = heatmap[layer_from, layer_to]  # (n_ov, n_qk, d_head)
+ov=0
+qk=1
+
+# plot line graph of head_from_to[ov, qk]
+fig = go.Figure()
+fig.add_trace(go.Scatter(y=h_from_to[ov, qk], mode='lines+markers'))
+fig.update_layout(title=f"Head {layer_from}.{ov} to {layer_to}.{qk} Weightings",
+                  xaxis_title="Component",
+                  yaxis_title="Weight")
+# also draw mean random horizontal line from mean_mean
+fig.add_trace(go.Scatter(y=[mean_mean] * h_from_to[ov, qk].shape[0], mode='lines', name='Mean Random'))
+fig.add_trace(go.Scatter(y=[mean_max] * h_from_to[ov, qk].shape[0], mode='lines', name='Max Random'))
+
+# %%
+# count number of times each component is attended to across all OV-QK pairs
+attended_more_than_mean = h_from_to > mean_mean
+attended_count = attended_more_than_mean.sum(axis=(0, 1))
+print(attended_count)
+
+# %%
+print(heatmap.mean(), heatmap.std())
