@@ -1,6 +1,7 @@
 # %%
 import os
 from pathlib import Path
+from typing import Literal
 
 from plotly.subplots import make_subplots
 import torch
@@ -203,8 +204,13 @@ def random_composition_scores(d_embed, d_head, n_runs=10):
     return maxes, means
 
 # %%
+def compute_entropy(a, axis=-1):
+    a = np.array(a) / (np.sum(a, axis=axis, keepdims=True) + 1e-10)
+
+    return -np.sum(a * np.log(a + 1e-10), axis=axis)
+
 # plot on a 2d grid of heatmaps, x=layer from, y=layer to
-def plot_heatmap_grid(heatmap, all_to_all=True, subtract=None, log_scale=False):
+def plot_heatmap_grid(heatmap, all_to_all=True, subtract=None, func: Literal["max", "mean", "entropy"]="max"):
     n_layers = heatmap.shape[0]
     pairs = [(i, j) for i in range(n_layers) for j in range(n_layers)]
     fig = make_subplots(
@@ -213,11 +219,15 @@ def plot_heatmap_grid(heatmap, all_to_all=True, subtract=None, log_scale=False):
         subplot_titles=[f"{i}.OV -> {j}.QK" if (all_to_all or i < j) else "" for i, j in pairs],
     )
 
-    h = heatmap.max(axis=-1)
+    if func == "mean":
+        h = heatmap.mean(axis=-1)
+    elif func == "max":
+        h = heatmap.max(axis=-1)
+    elif func == "entropy":
+        h = compute_entropy(heatmap, axis=-1)
+
     if subtract is not None:
         h = h - subtract
-    if log_scale:
-        h = np.log1p(h)
     h_argmax = heatmap.argmax(axis=-1)
     cmin = h.min()
     cmax = h.max()
@@ -473,8 +483,10 @@ def compute_overlap(a, b, top_n=3):
     union = len(set(top_a_indices) | set(top_b_indices))
     return intersection / union if union > 0 else 0
 
-# For a given pair of layers, take pairs of OV-QK heads. Plot overlap between top components
-def plot_top_component_overlap(heatmap, top_n=3, all_to_all=True):
+
+# %%
+# For a given pair of layers, take pairs of OV-QK heads. Plot overlap between (top) components
+def plot_exhaustive_component_overlap(heatmap, all_to_all=True, overlap_metric_fn=None, want_lower=True):
     n_layers = heatmap.shape[0]
 
     overlap = -np.empty((n_layers, n_layers, heatmap.shape[2], heatmap.shape[3], heatmap.shape[2], heatmap.shape[3]))
@@ -498,19 +510,16 @@ def plot_top_component_overlap(heatmap, top_n=3, all_to_all=True):
                     for ov2 in range(n_ov):
                         for qk2 in range(n_qk):
                             scores2 = h[ov2, qk2]
-                            # top_indices2 = np.argsort(scores2)[-top_n:][::-1]
-                            # overlap = len(set(top_indices) & set(top_indices2))
-
-                            # overlap = cosine sim between scores and scores2
-                            o = compute_overlap(scores, scores2, top_n=top_n)
+                            o = overlap_metric_fn(scores, scores2)
 
                             overlap[i, j, ov, qk, ov2, qk2] = o
 
     pairs = [(i, j) for i in range(n_layers) for j in range(n_layers)]
+    sign = "↓" if want_lower else "↑"
     fig = make_subplots(
         rows=n_layers,
         cols=n_layers,
-        subplot_titles=[f"{i}.OV -> {j}.QK (avg: {overlap[i, j].mean():.2f}↓)" if (all_to_all or i < j) else "" for i, j in pairs],
+        subplot_titles=[f"{i}.OV -> {j}.QK (avg: {overlap[i, j].mean():.2f}{sign})" if (all_to_all or i < j) else "" for i, j in pairs],
     )
     for i in range(n_layers):
         for j in range(n_layers):
@@ -543,28 +552,57 @@ def plot_top_component_overlap(heatmap, top_n=3, all_to_all=True):
     fig.data[-1].update(colorbar=dict(x=1.05, y=0.5, thickness=20), showscale=True)
 
     fig.update_layout(
-        title=f"Component Weighting Overlap Heatmap (IOU of top-{top_n} component indices). For a given OV-QK pairing, to what extent do different heads pay attention to the same top {top_n} components?",
+        title=f"Component Weighting Overlap Heatmap.",
         font=dict(size=12),  # Reduce overall font size including subplot titles
     )
 
     return fig, overlap
 
 # %%
-# plot average cosine similarity for each layer pair
-def plot_average_diversity(overlaps, cmin=-1, cmax=1):
+def plot_average_pairwise_overlap(overlaps, cmin=-1, cmax=1):
     n_layers = overlaps.shape[0]
-    avg_diversity = overlaps.mean(axis=(2, 3, 4, 5))  # Average over OV and QK heads
+    avg_overlap = overlaps.mean(axis=(2, 3, 4, 5))  # Average over OV and QK heads
 
     # plot avg_cosine_sims as a heatmap using plotly express
     fig = px.imshow(
-        avg_diversity,
+        avg_overlap,
         x=[f"{i}" for i in range(n_layers)],
         y=[f"{i}" for i in range(n_layers)],
         zmin=cmin,
         zmax=cmax,
         color_continuous_scale="Viridis",
         labels={"x": "Layer To", "y": "Layer From", "color": "Average Overlap"},
-        title="Average Overlap of Component Weightings Between All OV-QK Pairs in Each Layer Pair",
+        title="Average Pairwise Overlap of Component Weightings Between All OV-QK Pairs in Each Layer Pair",
+        aspect="auto",
+        text_auto=".2f",
+    )
+    # fig.update_layout(
+    #     xaxis_title="Layer From",
+    #     yaxis_title="Layer To",
+    #     xaxis=dict(tickvals=np.arange(n_layers), ticktext=[f"{i}" for i in range(n_layers)]),
+    #     yaxis=dict(tickvals=np.arange(n_layers), ticktext=[f"{i}" for i in range(n_layers)]),
+    # )
+    return fig
+
+# %%
+def plot_average_entropy(heatmap, cmin=2, cmax=5):
+    # heatmap: (n_layers, n_layers, n_ov, n_qk, n_components)
+    n_layers = heatmap.shape[0]
+    # entropy = compute_entropy(heatmap, axis=-1)
+    avg_dist = heatmap.mean(axis=(2, 3))  # Average over OV and QK heads
+    entropy = compute_entropy(avg_dist, axis=-1)
+    assert entropy.shape == (n_layers, n_layers)
+
+    # plot avg_cosine_sims as a heatmap using plotly express
+    fig = px.imshow(
+        entropy,
+        x=[f"{i}" for i in range(n_layers)],
+        y=[f"{i}" for i in range(n_layers)],
+        zmin=cmin,
+        zmax=cmax,
+        color_continuous_scale="Viridis",
+        labels={"x": "Layer To", "y": "Layer From", "color": "Average Entropy"},
+        title="Average Entropy of Component Weightings Between All OV-QK Pairs in Each Layer Pair (↑)",
         aspect="auto",
         text_auto=".2f",
     )
@@ -588,7 +626,7 @@ layer_weights_path_baseline_20heads = (
 # %%
 
 # layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path_moeut)
-layer_weights_path = layer_weights_path_baseline_20heads
+layer_weights_path = layer_weights_path_moeut_g16
 ALL_TO_ALL = False
 layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path, all_to_all=ALL_TO_ALL)
 # IS_UT = True
@@ -605,7 +643,7 @@ print(f"Mean of max composition score: {mean_max} ± {np.std(maxes)}")
 print(f"Mean of mean composition score: {mean_mean} ± {np.std(means)}")
 
 # %%
-heatmap_grid_fig = plot_heatmap_grid(heatmap, all_to_all=ALL_TO_ALL, subtract=mean_max, log_scale=False)
+heatmap_grid_fig = plot_heatmap_grid(heatmap, all_to_all=ALL_TO_ALL, subtract=mean_max, func="max")
 heatmap_grid_fig.update_layout(autosize=False, width=1800, height=1500,
     title=f"Composition Scores Heatmap Grid (max over components), minus expected max comp. score of two random matrices ({mean_max:.2f})")
 _save_path = Path(layer_weights_path).with_name("heatmap_sub_meanmax.png")
@@ -671,33 +709,53 @@ percentage_above_threshold_fig.write_image(_save_path, "png", scale=2, width=180
 percentage_above_threshold_fig.show()
 
 # # %%
-# percentage_above_threshold_fig_baseline = plot_percentage_above_threshold(heatmap_baseline, threshold=mean_max_baseline, ut=False)
-# percentage_above_threshold_fig_baseline.update_layout(autosize=False, width=1800, height=1500)
-# percentage_above_threshold_fig_baseline.show()
+# TOP_N=1
+# top_component_overlap_fig, overlaps = plot_exhaustive_component_overlap(heatmap, all_to_all=ALL_TO_ALL, overlap_metric_fn=lambda x, y: compute_overlap(x, y, top_n=TOP_N), want_lower=True)
+# top_component_overlap_fig.update_layout(autosize=False, width=3200, height=1500,
+#     title=f"Component Weighting Overlap Heatmap (IOU of top-{TOP_N} component indices). For a given OV-QK pairing, to what extent do different heads pay attention to the same top {TOP_N} components?",
+#     font=dict(size=12),  # Reduce overall font size including subplot titles
+# )
+# _save_path = Path(layer_weights_path).with_name(f"top_{TOP_N}_component_overlap.jpg")
+# top_component_overlap_fig.write_image(_save_path, "jpg", scale=1, width=3200, height=1500)
+# top_component_overlap_fig.show()
+
 
 # %%
-TOP_N=1
-top_component_overlap_fig, overlaps = plot_top_component_overlap(heatmap, top_n=TOP_N, all_to_all=ALL_TO_ALL)
-top_component_overlap_fig.update_layout(autosize=False, width=3200, height=1500)
-_save_path = Path(layer_weights_path).with_name(f"top_{TOP_N}_component_overlap.png")
-top_component_overlap_fig.write_image(_save_path, "png", scale=1, width=3200, height=1500)
-top_component_overlap_fig.show()
+# Entropy analyses
+def normalize_heatmap(heatmap):
+    """Normalize heatmap along the last axis (components) to sum to 1."""
+    h = heatmap / (np.sum(heatmap, axis=-1, keepdims=True) + 1e-10)
+    return h
+
+norm_heatmap = normalize_heatmap(heatmap)
+
+heatmap_entropy_grid_fig = plot_heatmap_grid(norm_heatmap, all_to_all=ALL_TO_ALL, func="entropy")
+heatmap_entropy_grid_fig.update_layout(autosize=False, width=1800, height=1500,
+    title="Composition Scores Heatmap Grid (entropy over component comp scores)")
+_save_path = Path(layer_weights_path).with_name("heatmap_entropy.png")
+heatmap_entropy_grid_fig.write_image(_save_path, "png", scale=2, width=1800, height=1500)
+heatmap_entropy_grid_fig.show()
 
 # %%
-# top_component_overlap_fig_baseline, overlaps_baseline = plot_top_component_overlap(heatmap_baseline, top_n=3, ut=False)
-# top_component_overlap_fig_baseline.update_layout(autosize=False, width=3000, height=1500)
-# top_component_overlap_fig_baseline.show()
+entropy_overlap_fig, _ = plot_exhaustive_component_overlap(norm_heatmap, all_to_all=ALL_TO_ALL, overlap_metric_fn=lambda x, y: compute_entropy((x+y)/2, axis=-1), want_lower=False)
+entropy_overlap_fig.update_layout(autosize=False, width=3200, height=1500,
+    title="Component Weighting Entropy Overlap. For a given OV-QK pairing, to what extent do different heads pay attention to the same components?",
+    font=dict(size=12),  # Reduce overall font size including subplot titles
+)
+_save_path = Path(layer_weights_path).with_name("entropy_component_overlap.jpg")
+# entropy_overlap_fig.write_image(_save_path, "jpg", scale=1, width=3200, height=1500)
+entropy_overlap_fig.show()
 
 # %%
-cmin = 0.0 #min(overlaps_moeut.mean((2,3,4,5)).min(), overlaps_baseline.mean((2,3,4,5)).min())
-cmax = 0.4 #max(overlaps_moeut.mean((2,3,4,5)).max(), overlaps_baseline.mean((2,3,4,5)).max())
-avg_kl_divergence_fig = plot_average_diversity(overlaps, cmin=cmin, cmax=cmax)
-# avg_kl_divergence_fig.update_layout(autosize=False, width=800, height=800)
-_save_path = Path(layer_weights_path).with_name(f"avg_diversity_top{TOP_N}.jpg")
-avg_kl_divergence_fig.write_image(_save_path, "jpg", scale=2, width=1800, height=1500)
-avg_kl_divergence_fig.show()
+avg_layer_entropy_fig = plot_average_entropy(norm_heatmap)
+avg_layer_entropy_fig.update_layout(autosize=False, width=800, height=600)
+_save_path = Path(layer_weights_path).with_name("avg_layer_entropy.jpg")
+avg_layer_entropy_fig.write_image(_save_path, "jpg", scale=1)
+avg_layer_entropy_fig.show()
 
 # %%
+# MISC
+
 ## What we want to check is whether two heads in the same OV-QK pairing are communicating along orthogonal
 # information channels. We get at this by checking whether the subspace to which the OV writes and the QK reads is
 # orthogonal to those of the other OV-QK pairs.
