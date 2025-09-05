@@ -130,33 +130,28 @@ def get_weights_and_heatmap_from_path(layer_weights_path, all_to_all=False):
 
 # %%
 # Find average composition scores for random matrices of the same size
-def random_composition_scores(d_embed, d_head, n_runs=10):
-    maxes, means = [], []
-    for _ in range(n_runs):
-        # Generate random matrices
-        qk = FactoredMatrix(
+def random_composition_heatmap(d_embed, d_head, n_layers=1, n_ov=10, n_qk=10):
+    assert n_ov==n_qk, "For simplicity, require n_ov == n_qk"
+    # Generate random matrices
+    def make_random_matrix():
+        return FactoredMatrix(
             torch.randn(d_embed, d_head, device=device), torch.randn(d_head, d_embed, device=device)
         )
-        ov = FactoredMatrix(
-            torch.randn(d_embed, d_head, device=device), torch.randn(d_head, d_embed, device=device)
-        )
-        layer_weights = {
-            "qk": [qk],
-            "ov": [ov],
+
+    layer_weights = [
+        {
+            "ov": [make_random_matrix() for _ in range(n_ov)],
+            "qk": [make_random_matrix() for _ in range(n_qk)],
             "d_head": d_head,
-            "n_heads": 1,
+            "n_heads": n_ov,
             "n_experts": {"v": 1, "o": 1},
-        }
-        # Compute composition scores
-        heatmap = very_exhaustive_heatmap(
-            [layer_weights], is_moeut=True, all_to_all=True
-        )  # (1,1,1,1,d_head)
-        heatmap = heatmap.squeeze((0, 1, 2, 3))
-        _max = heatmap.max().item()
-        _mean = heatmap.mean().item()
-        maxes.append(_max)
-        means.append(_mean)
-    return maxes, means
+        } for _ in range(n_layers)
+    ]
+    # Compute composition scores
+    heatmap = very_exhaustive_heatmap(
+        layer_weights, is_moeut=True, all_to_all=True
+    )  # (n_layers, n_layers, n_ov, n_qk, d_head)
+    return heatmap
 
 
 # %%
@@ -205,7 +200,7 @@ def plot_nd_heatmap_grid(
         subplot_titles = [""]
 
     fig = make_subplots(
-        rows=max(n_layers-1, 1),
+        rows=n_layers, #max(n_layers-1, 1),
         cols=n_layers,
         subplot_titles=subplot_titles,
     )
@@ -262,7 +257,7 @@ layer_weights_path_baseline_20heads = (
 # %%
 
 # layer_weights, heatmap = get_weights_and_heatmap_from_path(layer_weights_path_moeut)
-layer_weights_path = layer_weights_path_baseline
+layer_weights_path = layer_weights_path_baseline_20heads
 ALL_TO_ALL = False
 layer_weights, heatmap = get_weights_and_heatmap_from_path(
     layer_weights_path, all_to_all=ALL_TO_ALL
@@ -274,24 +269,28 @@ layer_weights, heatmap = get_weights_and_heatmap_from_path(
 # randoms
 d_embed = layer_weights[0]["d_embed"]
 d_head = layer_weights[0]["d_head"]
-maxes, means = random_composition_scores(d_embed, d_head, n_runs=10)
-mean_max = np.mean(maxes)
-mean_mean = np.mean(means)
-print(f"Mean of max composition score: {mean_max} ± {np.std(maxes)}")
-print(f"Mean of mean composition score: {mean_mean} ± {np.std(means)}")
+random_heatmap = random_composition_heatmap(d_embed, d_head, n_layers=1, n_ov=4, n_qk=4)
+mean_max = np.mean(random_heatmap.max(axis=-1))
+mean_mean = np.mean(random_heatmap.mean(axis=-1))
+print(f"Mean of max composition score: {mean_max} ± {np.std(random_heatmap.max(axis=-1))}")
+print(f"Mean of mean composition score: {mean_mean} ± {np.std(random_heatmap.mean(axis=-1))}")
 
 
-# %%
+ # %%
 # Entropy analyses
-def normalize_heatmap(heatmap):
+def normalize_heatmap(heatmap) -> np.ndarray:
     """Normalize heatmap along the last axis (components) to sum to 1."""
     h = heatmap / (np.sum(heatmap, axis=-1, keepdims=True) + 1e-10)
     return h
 
-
-norm_heatmap = normalize_heatmap(heatmap)
+# %%
+# Random entropy:
+norm_random_heatmap = normalize_heatmap(random_heatmap)
+h_entropy_random = compute_entropy(norm_random_heatmap, axis=-1)
+print(f"Random heatmap entropy: {h_entropy_random.mean()} ± {h_entropy_random.std()}")
 
 # %%
+norm_heatmap = normalize_heatmap(heatmap)
 h_entropy = compute_entropy(norm_heatmap, axis=-1)
 heatmap_entropy_grid_fig = plot_nd_heatmap_grid(
     h_entropy,
@@ -342,7 +341,6 @@ def compute_entropy_overlap(heatmap, all_to_all=True):
                             overlap[i, j, ov, qk, ov2, qk2] = o
     return overlap
 
-
 pairwise_entropy_overlap = compute_entropy_overlap(norm_heatmap, all_to_all=ALL_TO_ALL)
 pairwise_entropy_overlap = e.rearrange(pairwise_entropy_overlap, "i j ov1 qk1 ov2 qk2 -> i j (ov1 qk1) (ov2 qk2)")
 entropy_overlap_fig = plot_nd_heatmap_grid(
@@ -365,9 +363,51 @@ _save_path = Path(layer_weights_path).with_name("entropy_component_overlap.jpg")
 # entropy_overlap_fig.write_image(_save_path, "jpg", scale=1, width=3200, height=1500)
 entropy_overlap_fig.show()
 
+
 # %%
-# avg_layer_entropy_fig = plot_average_entropy(norm_heatmap)
-# avg_layer_entropy_fig.update_layout(autosize=False, width=800, height=600)
+avg_ov_entropy = compute_entropy(norm_heatmap.mean(axis=(3,), keepdims=True), axis=-1) # average over QK heads
+
+avg_ov_entropy_fig = plot_nd_heatmap_grid(
+    avg_ov_entropy,
+    all_to_all=ALL_TO_ALL,
+    cmin=2,
+    cmax=5,
+    layout_dict=dict(
+        title="Average Entropy of Component Weightings Between Different OV Heads (avg over QK heads) (↑)",
+        autosize=False,
+        width=1600,
+        height=1600,
+        font=dict(size=12),  # Reduce overall font size including subplot titles
+    ),
+    showtext=False
+)
+_save_path = Path(layer_weights_path).with_name("avg_ov_entropy.jpg")
+avg_ov_entropy_fig.write_image(_save_path, "jpg", scale=1)
+avg_ov_entropy_fig.show()
+
+# %%
+avg_qk_entropy = compute_entropy(norm_heatmap.mean(axis=(2,), keepdims=True), axis=-1) # average over OV heads
+
+avg_qk_entropy_fig = plot_nd_heatmap_grid(
+    avg_qk_entropy,
+    all_to_all=ALL_TO_ALL,
+    cmin=2,
+    cmax=5,
+    layout_dict=dict(
+        title="Average Entropy of Component Weightings Between Different QK Heads (avg over OV heads) (↑)",
+        autosize=False,
+        width=1600,
+        height=1600,
+        font=dict(size=12),  # Reduce overall font size including subplot titles
+    ),
+    showtext=False
+)
+_save_path = Path(layer_weights_path).with_name("avg_qk_entropy.jpg")
+avg_qk_entropy_fig.write_image(_save_path, "jpg", scale=1)
+avg_qk_entropy_fig.show()
+
+
+# %%
 avg_layer_entropy = compute_entropy(norm_heatmap.mean(axis=(2, 3)), axis=-1) # average over OV and QK heads
 
 avg_layer_entropy_fig = plot_nd_heatmap_grid(
